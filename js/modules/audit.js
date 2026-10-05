@@ -1,0 +1,42 @@
+// Audit log (admin only): who changed what, newest first
+import { h, clear, pageHead, failed, fmtDateTime, openModal } from '../ui.js';
+
+const NAMES = { eppd_companies: 'Companies', eppd_departments: 'Departments', eppd_job_titles: 'Job titles', eppd_lookups: 'Pick-lists',
+  eppd_payment_types: 'Payment types', eppd_policies: 'Policies', eppd_stat_versions: 'Statutory tables', eppd_holidays: 'Holidays', eppd_user_roles: 'Users' };
+
+function changes(o, n) {
+  if (!o) return Object.keys(n || {}).filter((k) => !['created_at', 'updated_at'].includes(k));
+  if (!n) return ['(deleted)'];
+  return Object.keys({ ...o, ...n }).filter((k) => !['updated_at'].includes(k) && JSON.stringify(o[k]) !== JSON.stringify(n[k]));
+}
+
+export async function render(el, ctx) {
+  const sel = h('select', { 'aria-label': 'Filter by area', style: 'width:auto' }, h('option', { value: '' }, 'All areas'),
+    Object.entries(NAMES).map(([k, v]) => h('option', { value: k }, v)));
+  const body = h('div', { class: 'table-wrap' });
+  el.append(pageHead('Audit log', 'Every change to settings and access, newest first (latest 300).', sel), h('section', { class: 'panel' }, body));
+  async function load() {
+    let q = ctx.sb.from('eppd_audit_log').select('*').order('id', { ascending: false }).limit(300);
+    if (sel.value) q = q.eq('table_name', sel.value);
+    const { data, error } = await q;
+    if (failed(error, 'Load')) return;
+    if (!data.length) { clear(body).append(h('div', { class: 'empty-state' }, 'No changes recorded yet.')); return; }
+    clear(body).append(h('table', { class: 'data' },
+      h('thead', {}, h('tr', {}, h('th', {}, 'When'), h('th', {}, 'Who'), h('th', {}, 'Area'), h('th', {}, 'Action'), h('th', {}, 'Changed'), h('th', {}))),
+      h('tbody', {}, data.map((r) => {
+        const ch = r.action === 'UPDATE' ? changes(r.old_data, r.new_data) : [];
+        const what = r.new_data?.name || r.new_data?.label || r.new_data?.email || r.new_data?.code || r.old_data?.name || r.row_id;
+        return h('tr', {},
+          h('td', { class: 'small' }, fmtDateTime(r.at)), h('td', { class: 'small' }, r.user_email || 'system / SQL'),
+          h('td', {}, NAMES[r.table_name] || r.table_name, h('div', { class: 'small muted' }, what)),
+          h('td', {}, { INSERT: 'Added', UPDATE: 'Changed', DELETE: 'Deleted' }[r.action] || r.action),
+          h('td', { class: 'small muted' }, ch.slice(0, 4).join(', '), ch.length > 4 ? ` +${ch.length - 4}` : ''),
+          h('td', { class: 'actions' }, h('button', { class: 'btn sm ghost', type: 'button', onclick: () => openModal({ title: 'Change details', wide: true,
+            body: h('div', { class: 'grid-2' },
+              h('div', {}, h('h3', {}, 'Before'), h('pre', { class: 'small', style: 'white-space:pre-wrap' }, JSON.stringify(r.old_data, null, 2) || '—')),
+              h('div', {}, h('h3', {}, 'After'), h('pre', { class: 'small', style: 'white-space:pre-wrap' }, JSON.stringify(r.new_data, null, 2) || '—'))) }) }, 'Details')));
+      }))));
+  }
+  sel.addEventListener('change', load);
+  await load();
+}
