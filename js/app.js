@@ -11,6 +11,7 @@ const ROUTES = {
   'dashboard':              { label: 'Overview',               load: () => import('./modules/dashboard.js') },
   'employees':              { label: 'Employees',              load: () => import('./modules/employees.js') },
   'employees/:id':          { label: 'Employee',               load: () => import('./modules/employee.js'), menu: 'employees' },
+  'employees/former':       { label: 'Former staff',           load: () => import('./modules/formerstaff.js') },
   'employees/ids':          { label: 'Employee IDs',           load: () => import('./modules/eid.js') },
   'employees/import':       { label: 'Import from workbook',   load: () => import('./modules/import.js'), roles: ['admin'] },
   'leave':                  { label: 'Leave records',          load: () => import('./modules/leave.js'), roles: ['admin', 'hr'] },
@@ -34,7 +35,7 @@ const ROUTES = {
 };
 const MENU = [
   { group: null, items: ['dashboard'] },
-  { group: 'People', items: ['employees', 'employees/ids', 'employees/import'] },
+  { group: 'People', items: ['employees', 'employees/former', 'employees/ids', 'employees/import'] },
   { group: 'Time & leave', items: ['leave', 'leave/balances', 'leave/al-calculator', 'leave/year-end', 'time', 'leave/import'] },
   { group: 'Payroll', items: ['payroll', 'payroll/import'], soon: [['Payslips & reports', 'Phase 5']] },
   { group: 'Settings', items: ['settings/companies', 'settings/org', 'settings/lists', 'settings/payment-types',

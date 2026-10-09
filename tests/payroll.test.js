@@ -222,3 +222,18 @@ test('history import: a second workbook row for the same person, company and mon
   assert.equal(h.summary.lines, 1);
   assert.ok(h.issues.some((i) => /second row for the same company/.test(i.message)));
 });
+
+test('marked as left with no last working day: left out of the run, with a notice', () => {
+  const person = { id: 5, full_name: 'LEFT NO DATE', dob: '1990-01-01', employments: [{ ...em({ confirmation_status: 'R' }),
+    assignments: [{ id: 51, company_id: 1, is_primary: true, salary_history: [sal(2500)], allowances: [] }] }] };
+  const still = { id: 6, full_name: 'STILL HERE', dob: '1990-01-01', employments: [{ ...em({ confirmation_status: 'C' }),
+    assignments: [{ id: 61, company_id: 1, is_primary: true, salary_history: [sal(2500)], allowances: [] }] }] };
+  const confMeta = { R: { is_active_employment: false }, C: { is_active_employment: true } };
+  const r = buildRun({ period: '2026-09-01', people: [person, still], types, typesById, tables, policies: {}, confMeta });
+  assert.deepEqual(r.lines.map((l) => l.emp_name), ['STILL HERE']);
+  assert.match(r.notices[0], /Left out: LEFT NO DATE/);
+  // once the last day is entered, the dates decide: paid up to that day
+  person.employments[0].resigned_date = '2026-09-04';
+  const r2 = buildRun({ period: '2026-09-01', people: [person], types, typesById, tables, policies: {}, confMeta });
+  assert.equal(amt(r2.lines[0].items, 'BASIC'), 333.33);   // 2500 ÷ 30 × 4
+});

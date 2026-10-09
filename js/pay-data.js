@@ -59,6 +59,6 @@ export async function loadPayMonth(sb, period) {
   return {
     ref, period: p, people, typeList: types.list, types: types.byCode, typesById: types.byId, tables, policies: ref.policies,
     ...inputs, run, existing: run?.lines || [], prevLines: prev?.lines || [],
-    companies: new Map(ref.companies.map((c) => [c.id, c])),
+    companies: new Map(ref.companies.map((c) => [c.id, c])), confMeta: ref.confMeta,
   };
 }

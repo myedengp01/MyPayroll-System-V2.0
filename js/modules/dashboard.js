@@ -3,7 +3,7 @@ import { h, pageHead } from '../ui.js';
 
 export async function render(el, ctx) {
   const year = new Date().getFullYear();
-  const [comp, vers, hol, pend, emps, payRuns] = await Promise.all([
+  const [comp, vers, hol, pend, emps, payRuns, statusList, empStatus] = await Promise.all([
     ctx.sb.from('eppd_companies').select('code,name,is_primary,logo,epf_employer_no,socso_employer_no,tax_employer_no').eq('is_active', true),
     ctx.sb.from('eppd_stat_versions').select('id', { count: 'exact', head: true }),
     ctx.sb.from('eppd_holidays').select('id', { count: 'exact', head: true })
@@ -12,7 +12,11 @@ export async function render(el, ctx) {
                        : Promise.resolve({ count: 0 }),
     ctx.sb.from('eppd_employees').select('id', { count: 'exact', head: true }),
     ctx.can(['admin', 'hr']) ? ctx.sb.from('eppd_pay_runs').select('period,status,source').order('period', { ascending: false }) : Promise.resolve({ data: null }),
+    ctx.sb.from('eppd_lookups').select('code,meta').eq('category', 'confirmation_status'),
+    ctx.sb.from('eppd_employee_list').select('confirmation_status,resigned_date').is('resigned_date', null).limit(5000),
   ]);
+  const leftCodes = new Set((statusList.data || []).filter((l) => l.meta?.is_active_employment === false).map((l) => l.code));
+  const noLastDay = (empStatus.data || []).filter((r) => leftCodes.has(r.confirmation_status)).length;
   const runs = payRuns.data;
   const primary = (comp.data || []).filter((c) => c.is_primary);
   const withLogo = primary.filter((c) => c.logo).length;
@@ -31,6 +35,9 @@ export async function render(el, ctx) {
   ];
   items.splice(0, 0, { done: (emps.count || 0) > 0, text: 'Import staff from the MEG-EPPD workbook',
     detail: emps.count ? `${emps.count} people on record` : 'No employees yet', href: emps.count ? '#/employees' : (ctx.can(['admin']) ? '#/employees/import' : '#/employees') });
+  if (ctx.can(['admin', 'hr'])) items.push({ done: noLastDay === 0, text: 'Give every former employee a last working day',
+    detail: noLastDay ? `${noLastDay} marked as left with no last day: payroll leaves them out until it is entered` : 'All former staff have a last working day',
+    href: noLastDay ? '#/employees?status=former&missing=1' : '#/employees/former' });
   if (runs) {
     const imported = runs.filter((r) => r.source === 'import').length;
     items.push({ done: imported > 0, text: 'Import January–September 2026 payroll from the workbook', detail: imported ? `${imported} months imported` : 'Year-to-date totals start here',

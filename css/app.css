@@ -392,3 +392,7 @@ details > summary.linkish::-webkit-details-marker { display: none; }
   .modal .grid-2 { grid-template-columns: 1fr; }
   .modal .filter-row > input, .modal .filter-row > select { flex: 1 1 100%; width: 100% !important; }
 }
+
+/* clickable fact tiles */
+button.fact.linkfact { font: inherit; color: inherit; text-align: left; cursor: pointer; }
+button.fact.linkfact:hover { border-color: var(--accent); }

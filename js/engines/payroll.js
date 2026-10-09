@@ -229,15 +229,20 @@ export function buildRun(D) {
   const period = periodOf(D.period);
   const existing = new Map((D.existing || []).map((l) => [`${l.employee_id}|${l.company_id || 0}`, l]));
   const prevPcb = new Map((D.prevLines || []).filter((l) => !l.excluded && Number(l.pcb) > 0).map((l) => [`${l.employee_id}|${l.company_id || 0}`, Number(l.pcb)]));
-  const lines = []; const skipped = []; const notices = []; const seen = new Set(); const paidPeople = new Set();
+  const lines = []; const skipped = []; const notices = []; const seen = new Set(); const paidPeople = new Set(); const noLastDay = new Set();
   const isJan = period.slice(5, 7) === '01';
   const statFor = (age, p, flags) => ({ age, statClass: p.statClass || 'MY', period, flags, tables: D.tables, rules });
 
   for (const p of D.people) {
     // every employment period × company active in this month, oldest first
     const cands = [];
-    for (const em of p.employments || []) for (const a of em.assignments || []) {
-      const win = activeWindow(period, em, a); if (win) cands.push({ em, a, win });
+    for (const em of p.employments || []) {
+      // marked Resigned / Terminated / Dismissed but no last working day: never paid by the app
+      if (!em.resigned_date && D.confMeta?.[em.confirmation_status]?.is_active_employment === false) {
+        if (activeWindow(period, em, {})) noLastDay.add(p.full_name);
+        continue;
+      }
+      for (const a of em.assignments || []) { const win = activeWindow(period, em, a); if (win) cands.push({ em, a, win }); }
     }
     if (!cands.length) continue;
     cands.sort((x, y) => (x.em.join_date || '').localeCompare(y.em.join_date || '') || (x.win.from).localeCompare(y.win.from));
@@ -319,6 +324,7 @@ export function buildRun(D) {
     for (const b of D.buybacks || []) if (Number(b.close_year) === Number(period.slice(0, 4)) - 1 && !paidPeople.has(b.employee_id))
       notices.push(`${names.get(b.employee_id) || `Employee ${b.employee_id}`}: ${b.days} day(s) of ${b.close_year} AL buy-back, but they are not employed in January. Pay it in their final month (add an AL Buy Back item) if it is due.`);
   }
+  if (noLastDay.size) notices.unshift(`Left out: ${[...noLastDay].sort().join(', ')}. They are marked as no longer employed but have no last working day. Add it in their Employment tab (Edit); if they did work this month, Recalculate afterwards.`);
   lines.sort((a, b) => a.emp_name.localeCompare(b.emp_name) || String(a.company_id).localeCompare(String(b.company_id)));
   return { lines, skipped, notices };
 }

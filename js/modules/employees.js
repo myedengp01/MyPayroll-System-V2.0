@@ -18,7 +18,11 @@ export async function render(el, ctx, params, query) {
     r._search = [r.full_name, r.chinese_name, r.emp_id, r.job_title, r.department_code].filter(Boolean).join(' ').toLowerCase();
   }
 
-  const st = { status: query.status || 'current', company: query.company || '', dept: query.dept || '', q: query.q || '' };
+  const st = { status: query.status || 'current', company: query.company || '', dept: query.dept || '', q: query.q || '', missing: query.missing === '1' || query.missing === 'true' };
+  const isMissing = (r) => r._status.key === 'former' && !r.resigned_date;
+  const counts = { current: rows.filter((r) => r._status.key !== 'former').length, notice: rows.filter((r) => r._status.key === 'notice').length,
+    former: rows.filter((r) => r._status.key === 'former').length, all: rows.length };
+  const missingCount = rows.filter(isMissing).length;
   const search = h('input', { type: 'search', placeholder: 'Search name, Chinese name, ID or job title', 'aria-label': 'Search employees', value: st.q });
   const companySel = h('select', { 'aria-label': 'Company' }, h('option', { value: '' }, 'All companies'),
     ref.companies.map((c) => h('option', { value: c.id, selected: String(c.id) === st.company }, c.short_name || c.name)));
@@ -32,17 +36,21 @@ export async function render(el, ctx, params, query) {
   const cur = rows.filter((r) => r._status.key !== 'former');
   const facts = [
     ['Current staff', cur.length],
+    ['Former staff', counts.former, () => { st.status = 'former'; st.missing = false; sync(); draw(); }],
     ['On probation', cur.filter((r) => r.confirmation_status === 'UP').length],
     ['Serving notice', rows.filter((r) => r._status.key === 'notice').length],
     ['Joined this month', rows.filter((r) => r.join_date && r.join_date.slice(0, 7) === ym).length],
     ['Leaving this month', rows.filter((r) => r.resigned_date && r.resigned_date >= firstOfMonth(today) && r.resigned_date <= lastDayOfMonth(today)).length],
   ];
+  if (missingCount) facts.push(['Former staff with no last working day', missingCount, () => { st.status = 'former'; st.missing = true; sync(); draw(); }, true]);
 
   el.append(
     pageHead('Employees', 'Everyone employed by the group, past and present. Records are keyed by Employee ID, so name changes never break payroll.',
       rows.length ? h('button', { class: 'btn', type: 'button', onclick: exportCsv }, 'Export list') : null,
       canEdit ? h('button', { class: 'btn primary', type: 'button', onclick: () => openAddEmployee(ctx, ref, (id) => { location.hash = `#/employees/${id}`; }) }, 'Add employee') : null),
-    rows.length ? h('div', { class: 'facts' }, facts.map(([l, n]) => h('div', { class: 'fact' }, h('b', {}, n), h('span', {}, l)))) : null,
+    rows.length ? h('div', { class: 'facts' }, facts.map(([l, n, go, bad]) => go
+      ? h('button', { type: 'button', class: `fact linkfact ${bad ? 'bad' : ''}`, onclick: go, title: 'Show these people' }, h('b', {}, n), h('span', {}, l))
+      : h('div', { class: 'fact' }, h('b', {}, n), h('span', {}, l)))) : null,
     h('section', { class: 'panel' },
       h('div', { class: 'panel-head filters' }, tabs, h('div', { class: 'filter-row' }, search, companySel, deptSel)),
       body, h('div', { class: 'panel-foot' }, countEl)));
@@ -59,24 +67,28 @@ export async function render(el, ctx, params, query) {
 
   function filtered() {
     const q = st.q.trim().toLowerCase();
-    return rows.filter((r) => (st.status === 'all' || r._status.key === st.status || (st.status === 'current' && r._status.key === 'notice'))
+    // a name search looks across everyone, whatever tab is open
+    const anyStatus = q.length >= 2;
+    return rows.filter((r) => (anyStatus || st.status === 'all' || r._status.key === st.status || (st.status === 'current' && r._status.key === 'notice'))
       && (!st.company || String(r.company_id) === st.company)
       && (!st.dept || String(r.department_id) === st.dept)
+      && (!st.missing || isMissing(r))
       && (!q || r._search.includes(q)));
   }
 
   function draw() {
     clear(tabs).append(...STATUS_TABS.map(([k, l]) => h('button', { type: 'button', role: 'tab', 'aria-selected': String(st.status === k),
-      onclick: () => { st.status = k; sync(); draw(); } }, l)));
+      onclick: () => { st.status = k; st.missing = false; sync(); draw(); } }, `${l} (${counts[k]})`)));
+    if (st.missing) tabs.append(h('button', { type: 'button', class: 'tag warn', style: 'margin-left:.5rem', onclick: () => { st.missing = false; sync(); draw(); } }, 'No last working day only ✕'));
     const list = filtered();
     countEl.textContent = `${list.length} of ${rows.length} people`;
     clear(body);
     if (!list.length) { body.append(h('div', { class: 'empty-state' }, 'No one matches these filters.')); return; }
     body.append(h('table', { class: 'data clickable' },
       h('thead', {}, h('tr', {}, h('th', {}, 'Employee'), h('th', {}, 'Company'), h('th', {}, 'Department'),
-        h('th', {}, 'Job title'), h('th', {}, 'Joined'), h('th', {}, 'Service'), h('th', {}, 'Status'))),
+        h('th', {}, 'Job title'), h('th', {}, 'Joined'), st.status === 'former' ? h('th', {}, 'Last day') : null, h('th', {}, 'Service'), h('th', {}, 'Status'))),
       h('tbody', {}, list.map((r) => {
-        const end = r._status.key === 'former' ? (r.resigned_date || today) : today;
+        const end = r._status.key === 'former' ? r.resigned_date : today;
         return h('tr', { tabindex: '0', onclick: () => open(r), onkeydown: (e) => { if (e.key === 'Enter') open(r); } },
           h('td', {}, h('a', { href: `#/employees/${r.id}`, class: 'row-link' }, r.full_name),
             h('div', { class: 'small muted' }, [r.emp_id || 'No ID', r.chinese_name].filter(Boolean).join(' · '))),
@@ -84,7 +96,8 @@ export async function render(el, ctx, params, query) {
           h('td', {}, r.department_code || '—'),
           h('td', {}, r.job_title || '—'),
           h('td', { class: 'nowrap' }, fmtDate(r.join_date)),
-          h('td', { class: 'nowrap' }, r.join_date ? formatService(serviceLength(r.join_date, end)) : ''),
+          st.status === 'former' ? h('td', { class: 'nowrap' }, r.resigned_date ? fmtDate(r.resigned_date) : h('span', { class: 'tag warn' }, 'Missing')) : null,
+          h('td', { class: 'nowrap' }, r.join_date && end ? formatService(serviceLength(r.join_date, end)) : ''),
           h('td', {}, statusTag(r._status, r.confirmation_status)));
       }))));
   }

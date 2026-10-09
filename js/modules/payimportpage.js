@@ -40,7 +40,7 @@ export async function render(el, ctx) {
       if (!res.months.length) throw new Error('No payroll months from January 2026 were found in this file.');
       status.textContent = `${f.name} read. Comparing with the new engine…`;
       const inputs = await loadPayInputs(ctx.sb, res.months[0].period, res.months[res.months.length - 1].period);
-      const D = { people, types: types.byCode, typesById: types.byId, tables, policies: ref.policies, ...inputs };
+      const D = { people, types: types.byCode, typesById: types.byId, tables, policies: ref.policies, confMeta: ref.confMeta, ...inputs };
       const cmp = new Map(res.months.map((m) => [m.period, compareMonth(m, D)]));
       status.textContent = `${f.name} read.`;
       preview(res, cmp, f.name);

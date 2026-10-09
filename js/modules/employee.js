@@ -61,13 +61,15 @@ export async function render(el, ctx, params, query) {
     // ---- header ----
     const e = D.emp; const em = cur(); const status = employmentStatus(em, ref.confMeta, today);
     const mainAsg = em ? asgOf(em.id)[0] : null;
-    const end = status.key === 'former' ? (em?.resigned_date || today) : today;
+    const end = status.key === 'former' ? (em?.resigned_date || null) : today;
+    const missingLastDay = status.key === 'former' && em && !em.resigned_date;
     const facts = [
       ['Paid by', mainAsg ? asgOf(em.id).map((a) => ref.company(a.company_id)?.short_name || ref.company(a.company_id)?.name).join(', ') : '—'],
       ['Department', em?.department_id ? (ref.department(em.department_id)?.code || '') : '—'],
       ['Job title', em?.job_title_id ? ref.jobTitle(em.job_title_id)?.name : '—'],
       ['Joined', em?.join_date ? fmtDate(em.join_date) : '—'],
-      ['Service', em?.join_date ? formatService(serviceLength(em.join_date, end)) : '—'],
+      ['Service', em?.join_date && end ? formatService(serviceLength(em.join_date, end)) : (missingLastDay ? 'Last working day missing' : '—')],
+      ...(status.key === 'former' && em?.resigned_date ? [['Last working day', fmtDate(em.resigned_date)]] : []),
     ];
     if (canHR && D.priv?.dob) facts.push(['Age', `${ageOn(D.priv.dob, today)}`]);
     clear(headEl).append(h('section', { class: 'profile-head' },
@@ -77,6 +79,7 @@ export async function render(el, ctx, params, query) {
           e.chinese_name ? h('span', {}, e.chinese_name) : null,
           h('span', { class: 'id-chip' }, e.emp_id || 'No Employee ID'),
           statusTag(status, em?.confirmation_status),
+          missingLastDay ? h('span', { class: 'tag warn', title: 'Add it in the Employment tab (Edit). Payroll leaves this person out until then.' }, 'No last working day') : null,
           D.empls.length > 1 ? h('span', { class: 'tag' }, `${D.empls.length} employment periods`) : null)),
       canHR ? h('div', { class: 'page-actions' },
         !e.emp_id ? h('button', { class: 'btn', type: 'button', onclick: generateId }, 'Generate Employee ID') : null,

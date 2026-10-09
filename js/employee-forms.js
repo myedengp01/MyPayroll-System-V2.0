@@ -156,6 +156,7 @@ export function editEmployment(ctx, ref, employeeId, em, onDone, { companyForNew
     join_date: field('Date joined', { type: 'date', value: e.join_date, required: true }),
     confirmation_status: field('Employment status', { type: 'select', options: lookupOpts(ref, 'confirmation_status', e.confirmation_status), value: e.confirmation_status || 'UP' }),
     confirmed_date: field('Confirmed on', { type: 'date', value: e.confirmed_date, hint: 'Blank while on probation.' }),
+    resigned_date: field('Last working day', { type: 'date', value: e.resigned_date, hint: 'Required when the status is Resigned, Terminated or Dismissed.' }),
     job_status: field('Job status', { type: 'select', options: lookupOpts(ref, 'job_status', e.job_status), value: e.job_status }),
     department_id: field('Department', { type: 'select', options: deptOpts(ref, e.department_id), value: e.department_id }),
     job_title_id: field('Job title', { type: 'select', options: titleOpts(ref, e.job_title_id), value: e.job_title_id }),
@@ -172,9 +173,18 @@ export function editEmployment(ctx, ref, employeeId, em, onDone, { companyForNew
     body: h('div', { class: 'form-grid' }, companyF, Object.values(F)),
     actions: [{ label: em ? 'Save changes' : 'Add period', primary: true, onClick: async (close) => {
       const v = values(F); if (!v.join_date) { toast('Date joined is required.', 'error'); return false; }
+      const leftStatus = ref.confMeta?.[v.confirmation_status]?.is_active_employment === false;
+      if (leftStatus && !v.resigned_date) { toast(`Enter the last working day: the status "${ref.label('confirmation_status', v.confirmation_status)}" means they no longer work here.`, 'error', 6000); return false; }
+      if (v.resigned_date && v.resigned_date < v.join_date) { toast('The last working day cannot be before the date joined.', 'error'); return false; }
       if (em) {
         const { error } = await ctx.sb.from('eppd_employments').update(v).eq('id', em.id);
         if (failed(error)) return false;
+        // keep the paying-company assignments in step with the last working day
+        if ((v.resigned_date || null) !== (em.resigned_date || null)) {
+          const q = ctx.sb.from('eppd_assignments').update({ end_date: v.resigned_date || null }).eq('employment_id', em.id);
+          const { error: e3 } = em.resigned_date ? await q.or(`end_date.is.null,end_date.eq.${em.resigned_date}`) : await q.is('end_date', null);
+          if (failed(e3)) return false;
+        }
       } else {
         const { data, error } = await ctx.sb.from('eppd_employments').insert({ ...v, employee_id: employeeId }).select('id').single();
         if (failed(error)) return false;

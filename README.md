@@ -3,7 +3,7 @@
 Payroll app for MyEden Group, rebuilt from the MEG-EPPD 2026 workbook.
 Static site (GitHub Pages) + Supabase. No build step.
 
-**Current version:** v2026.10.09-16:30 · **Phase 4 – Monthly payroll**
+**Current version:** v2026.10.09-19:30 · **Phase 4 – Monthly payroll**
 
 ## First-time setup
 
@@ -18,6 +18,7 @@ Run these **in order**. Each file is safe to re-run.
 | `sql/004_employees.sql` | Phase 2: employees, employment periods, paying companies, salary history, allowances, Employee ID generator, workbook import. |
 | `sql/005_leave_time.sql` | Phase 3: leave records, balance adjustments, KPI grades, year-end close, overtime & part-time hours, OTCF links; working-week, leave, carry-forward and part-time policies. |
 | `sql/006_payroll.sql` | Phase 4: pay runs and pay lines, finalise / reopen, payroll history import, payroll policy. |
+| `sql/007_last_working_days.sql` | One-off fix: last working day for 7 former staff whose workbook "Resigned Date" was blank. |
 
 `sql/reset_employees.sql` is **not** part of setup. It deletes every employee record so the one-time
 workbook import can be run again before going live.
@@ -117,6 +118,12 @@ Its fixture contains real salaries, so it is **git-ignored** and skipped automat
 2. Note the change below.
 
 ## Change log
+- **v2026.10.09-19:30** — Former staff fix. Payroll leaves out anyone marked Resigned / Terminated / Dismissed who has
+  no last working day, and names them on the payroll page. The Employment form has a Last working day field, required
+  for those statuses (company assignments end on the same day). People › Former staff in the menu; status tabs show
+  counts; a name search looks across everyone; former staff list shows the last day; "no last working day" check on
+  the Employees page, the profile and the Overview checklist; service on a former employee's profile stops at the
+  last day. `sql/007_last_working_days.sql` sets the 7 missing last days.
 - **v2026.10.09-16:30** — Phase 4: monthly payroll. One pay run a month, one line per employee per paying company;
   basic from salary history (part months by calendar days, hourly staff from part-time hours), unpaid leave,
   overtime at Employment Act rates (basic ÷ 26 ÷ normal hours), recurring allowances and personal deductions,
