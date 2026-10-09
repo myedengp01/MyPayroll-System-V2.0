@@ -334,6 +334,24 @@ fieldset.form-section legend { font-family: var(--font-head); font-weight: 650; 
 .import-bar { position: sticky; bottom: 0; display: flex; justify-content: flex-end; align-items: center; gap: 1rem; padding: .9rem 1.2rem;
   margin-top: 1.25rem; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg); box-shadow: var(--shadow); }
 
+
+/* ---------- Phase 3: leave & time ---------- */
+td.strong { font-weight: 700; }
+td.neg, td.neg b { color: var(--danger); }
+table.bal-table th.grp { text-align: center; border-left: 1px solid var(--line); }
+table.bal-table thead tr:first-child th { border-bottom: 0; }
+table.recon td.diff { background: var(--marigold-soft); }
+table.recon td.num .muted { font-size: .85em; }
+table.data tr.flag td:first-child { box-shadow: inset 3px 0 0 var(--marigold); }
+table.data tr.grp-row td { background: var(--surface); }
+table.data tr.sub-row td { background: var(--surface-2); font-size: .88rem; padding-top: .35rem; padding-bottom: .35rem; }
+.entry-line { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem 1rem; padding-left: 1rem; }
+.fact.big b { font-size: 2rem; }
+.bal-box:empty { display: none; }
+details.legend-box { margin-top: 1.25rem; }
+details.legend-box summary { padding: .9rem 1.2rem; cursor: pointer; font-weight: 600; }
+details.legend-box ul { margin: 0 0 1rem; padding: 0 1.2rem 0 2.6rem; display: grid; gap: .35rem; font-size: .9rem; }
+
 /* ---------- responsive ---------- */
 @media (max-width: 900px) {
   .login { grid-template-columns: 1fr; }

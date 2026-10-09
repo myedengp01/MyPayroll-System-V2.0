@@ -34,7 +34,7 @@ export async function render(el, ctx) {
 
   el.append(
     pageHead(`Hello, ${ctx.me.display_name || ctx.me.email.split('@')[0]}`,
-      'Foundations and staff records are live. Leave, payroll and payslips arrive in the next phases.'),
+      'Staff records, leave and overtime are live. Payroll and payslips arrive in the next phases.'),
     h('section', { class: 'panel' },
       h('div', { class: 'panel-head' }, h('h2', {}, 'Setup checklist')),
       h('ul', { class: 'checklist' }, items.map((i) => h('li', {},
@@ -46,8 +46,8 @@ export async function render(el, ctx) {
       h('div', { class: 'roadmap' }, [
         ['Phase 1', 'Foundations: access, companies, lists, statutory tables, policies', 'Live'],
         ['Phase 2', 'Employees, Employee ID generator, salary & allowance history, Excel import', 'Live'],
-        ['Phase 3', 'Leave & attendance, AL calculator, OT and part-time hours', 'Next'],
-        ['Phase 4', 'Monthly payroll engine and approval workflow', ''],
+        ['Phase 3', 'Leave & attendance, AL calculator, year-end close, OT and part-time hours (OTCF)', 'Live'],
+        ['Phase 4', 'Monthly payroll engine and approval workflow', 'Next'],
         ['Phase 5', 'Payslips, monthly summary, statutory & bank files', ''],
         ['Phase 6', 'PCB, self-service, MEG-FORMS claims, final settlement, loans', ''],
       ].map(([p, t, s]) => h('div', {}, h('b', {}, p), h('span', {}, t),

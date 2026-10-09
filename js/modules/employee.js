@@ -5,6 +5,8 @@ import { employmentStatus, serviceLength, formatService, todayIso, ageOn, socsoF
 import { computeNotice } from '../engines/notice.js';
 import { statusTag } from './employees.js';
 import { editPerson, editPrivate, editEmployment, recordResignation, editAssignment, editSalary, editAllowance, deleteRow } from '../employee-forms.js';
+import { loadLeaveYear, balancesFor, loadHolidaySet, LEAVE_LABELS } from '../leave-data.js';
+import { openLeaveForm } from './leave.js';
 
 const STAT_FLAGS = [['epf_ee', 'EPF', 'employee'], ['epf_er', 'EPF', 'employer'], ['socso_ee', 'SOCSO', 'employee'], ['socso_er', 'SOCSO', 'employer'],
   ['eis_ee', 'EIS', 'employee'], ['eis_er', 'EIS', 'employer']];
@@ -82,11 +84,11 @@ export async function render(el, ctx, params, query) {
       h('dl', { class: 'facts-row' }, facts.map(([k, v]) => h('div', {}, h('dt', {}, k), h('dd', {}, v || '—'))))));
 
     // ---- tabs ----
-    const tabs = [['personal', 'Personal'], ['employment', 'Employment'], ...(canHR ? [['pay', 'Pay']] : [])];
+    const tabs = [['personal', 'Personal'], ['employment', 'Employment'], ...(canHR ? [['pay', 'Pay'], ['leave', 'Leave']] : [])];
     if (!tabs.some(([k]) => k === st.tab)) st.tab = 'personal';
     clear(tabsEl).append(...tabs.map(([k, l]) => h('button', { type: 'button', role: 'tab', 'aria-selected': String(st.tab === k),
       onclick: () => { st.tab = k; history.replaceState(null, '', `#/employees/${id}?tab=${k}`); draw(); } }, l)));
-    clear(bodyEl).append(st.tab === 'personal' ? personalTab() : st.tab === 'employment' ? employmentTab() : payTab());
+    clear(bodyEl).append(st.tab === 'personal' ? personalTab() : st.tab === 'employment' ? employmentTab() : st.tab === 'leave' ? leaveTab() : payTab());
   }
 
   // ---------------------------------------------------------------- personal
@@ -142,10 +144,47 @@ export async function render(el, ctx, params, query) {
           ['Job status', ref.label('job_status', em.job_status)],
           ['Department', em.department_id ? `${ref.department(em.department_id)?.code} · ${ref.department(em.department_id)?.name}` : null],
           ['Job title', ref.jobTitle(em.job_title_id)?.name], ['Paid by', asgOf(em.id).map((a) => ref.company(a.company_id)?.name).join(', ')],
-          ['Working hours', hours], ['OT basis', `÷ ${em.ot_days ?? 26} days · normal-day OT × ${em.ot_multiplier ?? 1.5}`],
+          ['Working hours', hours], em.job_status === 'PT' ? ['Weekly hours', em.weekly_hours ? `${em.weekly_hours} h (leave pro-rated)` : 'Not recorded: leave shown at full-time rates'] : null, ['OT basis', `÷ ${em.ot_days ?? 26} days · normal-day OT × ${em.ot_multiplier ?? 1.5}`],
           ['Resignation letter', fmtDate(em.resignation_letter_date)], ['Notice period', notice], ['Last working day', fmtDate(em.resigned_date)],
           ['Notes', em.notes]])));
     });
+    return wrap;
+  }
+
+  // ---------------------------------------------------------------- leave (HR only)
+  function leaveTab() {
+    const wrap = h('div', { class: 'stack' }, h('div', { class: 'loading' }, 'Loading leave…'));
+    const year = Number(today.slice(0, 4));
+    (async () => {
+      const L = await loadLeaveYear(ctx.sb, year);
+      const holidays = await loadHolidaySet(ctx.sb, [year - 1, year, year + 1]);
+      const ww = L.ref.policies.working_week || { rest_days: [0], off_days: [6] };
+      const me = L.people.find((p) => p.id === id);
+      if (!me) { clear(wrap).append(h('p', { class: 'muted' }, 'No employment record.')); return; }
+      const b = balancesFor(me, L);
+      const mine = L.records.filter((r) => r.employee_id === id);
+      const refresh = () => { draw(); };
+      const tile = (label, main, sub) => h('div', { class: 'fact' }, h('b', {}, main), h('span', {}, label, sub ? h('div', { class: 'small muted' }, sub) : null));
+      clear(wrap).append(
+        h('div', { class: 'block-head' }, h('div', {}, h('h2', {}, `Leave ${year}`), h('p', { class: 'small muted' }, 'Balances as at today.')),
+          h('div', { class: 'side-actions' }, h('a', { class: 'btn sm', href: `#/leave/al-calculator?emp=${id}&year=${year}` }, 'AL breakdown'),
+            h('button', { class: 'btn sm primary', type: 'button', onclick: () => openLeaveForm(ctx, L, holidays, ww, null, { employeeId: id, onSaved: refresh }) }, 'Record leave'))),
+        b.AL.needsHours ? h('p', { class: 'setup-warning' }, 'Part-timer without weekly hours: full-time entitlements shown. Add weekly hours in the Employment tab.') : null,
+        h('div', { class: 'facts' },
+          tile('Annual leave left', b.AL.balance, `${b.AL.entitled} entitled${b.AL.carried ? ` + ${b.AL.carried} carried` : ''} − ${b.AL.taken} taken${b.AL.buyback ? ` − ${b.AL.buyback} bought back` : ''}`),
+          tile('Sick leave left', b.SL.balance, `${b.SL.entitled} entitled − ${b.SL.taken} taken`),
+          tile('Hospitalisation pool', b.HPL.balance, 'shared with sick leave (60 days)'),
+          tile('Compassionate left', b.CPL.balance, `${b.CPL.perEvent} per occasion, ${b.CPL.entitled} a year`),
+          tile('Replacement leave', b.RL.balance, `${b.RL.earned} earned − ${b.RL.taken} taken`),
+          b.UPL.taken ? tile('Unpaid leave taken', b.UPL.taken) : null),
+        mine.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'data' },
+          h('thead', {}, h('tr', {}, h('th', {}, 'Type'), h('th', {}, 'Dates'), h('th', { class: 'num' }, 'Days'), h('th', {}, 'Note'), h('th', {}))),
+          h('tbody', {}, mine.map((r) => h('tr', { class: r.status === 'cancelled' ? 'inactive' : '' },
+            h('td', {}, LEAVE_LABELS[r.leave_type] || r.leave_type), h('td', { class: 'nowrap' }, r.source === 'import' ? `${r.date_from.slice(0, 7)} (workbook total)` : (r.date_from === r.date_to ? fmtDate(r.date_from) : `${fmtDate(r.date_from)} – ${fmtDate(r.date_to)}`)),
+            h('td', { class: 'num' }, Number(r.days)), h('td', { class: 'small muted' }, r.note || ''),
+            h('td', { class: 'actions' }, h('button', { class: 'btn sm', type: 'button', onclick: () => openLeaveForm(ctx, L, holidays, ww, r, { onSaved: refresh }) }, 'Edit')))))))
+          : h('p', { class: 'muted small' }, `No leave recorded in ${year}.`));
+    })().catch((e) => { clear(wrap).append(h('p', { class: 'muted' }, String(e.message || e))); });
     return wrap;
   }
 

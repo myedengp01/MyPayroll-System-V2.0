@@ -163,6 +163,7 @@ export function editEmployment(ctx, ref, employeeId, em, onDone, { companyForNew
     work_to: field('Working hours to', { type: 'time', value: time5(e.work_to) }),
     meal_hours: field('Meal break (hours)', { type: 'number', step: '0.25', value: e.meal_hours ?? ref.policies.ot_defaults?.meal_break_hours ?? 1 }),
     ot_days: field('Working days per month (OT)', { type: 'number', step: '0.5', value: e.ot_days ?? ref.policies.ot_defaults?.working_days_per_month ?? 26 }),
+    weekly_hours: field('Weekly hours (part-timers)', { type: 'number', step: '0.5', value: e.weekly_hours, hint: 'Used to pro-rate annual and sick leave for part-time staff.' }),
     ot_multiplier: field('Normal-day OT rate (×)', { type: 'number', step: '0.1', value: e.ot_multiplier ?? ref.policies.ot_defaults?.normal_ot_multiplier ?? 1.5 }),
     notes: field('Notes', { type: 'textarea', value: e.notes, span2: true }),
   };

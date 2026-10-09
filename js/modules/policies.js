@@ -1,6 +1,7 @@
 // HR policies: notice period, AL entitlement bands, OT defaults, statutory rules
 import { h, clear, pageHead, toast, failed, fmtDate, field } from '../ui.js';
 import { computeNotice } from '../engines/notice.js';
+import { gradeOrder } from '../engines/leave.js';
 
 export async function render(el, ctx) {
   const isAdmin = ctx.can(['admin']);
@@ -105,4 +106,72 @@ export async function render(el, ctx) {
       h('div', { class: 'panel-body', style: 'display:grid;gap:.8rem' }, Object.values(srF),
         isAdmin ? h('button', { class: 'btn sm primary', type: 'button', style: 'justify-self:start', onclick: () =>
           save('statutory_rules', Object.fromEntries(Object.entries(srF).map(([k, f]) => [k, f.getValue()])), 'Statutory rules') }, 'Save statutory rules') : null))));
+
+  // ---------------- Phase 3: leave rules
+  const panel = (title, desc, ...kids) => h('section', { class: 'panel', style: 'margin-top:1.25rem' },
+    h('div', { class: 'panel-head' }, h('div', {}, h('h2', {}, title), desc ? h('p', { class: 'small muted' }, desc) : null)), h('div', { class: 'panel-body' }, kids));
+  const saveBtn = (label, fn) => (isAdmin ? h('button', { class: 'btn sm primary', type: 'button', style: 'margin-top:.9rem', onclick: fn }, label) : null);
+  const DOW = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+  // working week
+  const ww = structuredClone(P.working_week?.value || { rest_days: [0], off_days: [6] });
+  const dayRow = DOW.map((d, i) => {
+    const sel = h('select', { disabled: !isAdmin, 'aria-label': d, style: 'width:auto' },
+      [['work', 'Working day'], ['off', 'Off day'], ['rest', 'Rest day']].map(([v, l]) => h('option', { value: v, selected: (ww.rest_days.includes(i) ? 'rest' : ww.off_days.includes(i) ? 'off' : 'work') === v }, l)));
+    sel.addEventListener('change', () => {
+      ww.rest_days = ww.rest_days.filter((x) => x !== i); ww.off_days = ww.off_days.filter((x) => x !== i);
+      if (sel.value === 'rest') ww.rest_days.push(i); if (sel.value === 'off') ww.off_days.push(i);
+    });
+    return h('label', { class: 'field' }, d, sel);
+  });
+  el.append(panel('Working week', 'Off days and rest days are not counted as leave days. Work on them is overtime: off day at 1.5×, rest day under the Employment Act rest-day rule.',
+    h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(auto-fill,minmax(150px,1fr))' }, dayRow),
+    saveBtn('Save working week', () => save('working_week', ww, 'Working week'))));
+
+  // leave entitlements
+  const lr = structuredClone(P.leave_rules?.value || {});
+  const n = (v, onset, w = '5rem') => { const i = num(v, w); i.addEventListener('input', () => onset(i.value === '' ? null : Number(i.value))); return i; };
+  const slBands = lr.SL?.bands || [];
+  el.append(panel('Leave entitlements', 'Employment Act minimums by default. Annual leave bands are set above.',
+    h('table', { class: 'data', style: 'max-width:640px' }, h('tbody', {},
+      h('tr', {}, h('td', {}, 'Sick leave, under 2 years'), h('td', {}, n(slBands[0]?.days, (v) => { slBands[0].days = v; }), ' days')),
+      h('tr', {}, h('td', {}, 'Sick leave, 2 to under 5 years'), h('td', {}, n(slBands[1]?.days, (v) => { slBands[1].days = v; }), ' days')),
+      h('tr', {}, h('td', {}, 'Sick leave, 5 years and above'), h('td', {}, n(slBands[2]?.days, (v) => { slBands[2].days = v; }), ' days')),
+      h('tr', {}, h('td', {}, 'Hospitalisation pool (includes sick leave)'), h('td', {}, n(lr.HPL?.days, (v) => { lr.HPL = { ...(lr.HPL || {}), days: v }; }), ' days a year')),
+      h('tr', {}, h('td', {}, 'Maternity (consecutive)'), h('td', {}, n(lr.MTL?.days, (v) => { lr.MTL = { ...(lr.MTL || {}), days: v }; }), ' days')),
+      h('tr', {}, h('td', {}, 'Paternity (consecutive)'), h('td', {}, n(lr.PTL?.days, (v) => { lr.PTL = { ...(lr.PTL || {}), days: v }; }), ' days, after ',
+        n(lr.PTL?.min_service_months, (v) => { lr.PTL = { ...(lr.PTL || {}), min_service_months: v }; }, '4rem'), ' months')),
+      h('tr', {}, h('td', {}, 'Compassionate leave'), h('td', {}, n(lr.CPL?.per_occasion, (v) => { lr.CPL = { ...(lr.CPL || {}), per_occasion: v }; }, '4rem'), ' days per occasion, up to ',
+        n(lr.CPL?.per_year, (v) => { lr.CPL = { ...(lr.CPL || {}), per_year: v }; }, '4rem'), ' a year')))),
+    saveBtn('Save leave entitlements', () => save('leave_rules', lr, 'Leave entitlements'))));
+
+  // carry forward
+  const cf = structuredClone(P.carry_forward?.value || { confirmed_only: true, grades: {}, buyback_grades: [], buyback_options: [], expiry: null });
+  const labels = cf.grade_labels || {};
+  const expiryIn = h('input', { type: 'text', placeholder: 'e.g. 06-30', value: cf.expiry || '', disabled: !isAdmin, style: 'width:7rem', 'aria-label': 'Expiry MM-DD' });
+  const optsIn = h('input', { type: 'text', value: (cf.buyback_options || []).join(', '), disabled: !isAdmin, style: 'width:12rem', 'aria-label': 'Buy-back options' });
+  el.append(panel('Annual leave carry forward', 'Applied at Year-end close. Only confirmed staff carry leave; unused days above the cap are bought back (if the grade allows and you choose a rate) or forfeited.',
+    h('table', { class: 'data', style: 'max-width:640px' },
+      h('thead', {}, h('tr', {}, h('th', {}, 'KPI grade'), h('th', {}, 'Carry up to'), h('th', {}, 'Buy-back allowed'))),
+      h('tbody', {}, gradeOrder(cf.grades).map((g) => {
+        const chk = h('input', { type: 'checkbox', disabled: !isAdmin, 'aria-label': `Buy-back for ${g}` }); chk.checked = (cf.buyback_grades || []).includes(g);
+        chk.addEventListener('change', () => { cf.buyback_grades = chk.checked ? [...new Set([...(cf.buyback_grades || []), g])] : (cf.buyback_grades || []).filter((x) => x !== g); });
+        return h('tr', {}, h('td', {}, `${g} · ${labels[g] || ''}`), h('td', {}, n(cf.grades[g], (v) => { cf.grades[g] = v ?? 0; }, '4rem'), ' days'), h('td', {}, chk));
+      }))),
+    h('div', { class: 'form-grid', style: 'margin-top:1rem;max-width:640px' },
+      h('label', { class: 'field' }, 'Buy-back rates offered (% of daily rate)', optsIn, h('span', { class: 'small muted' }, 'Comma separated. A custom rate can also be typed at year end.')),
+      h('label', { class: 'field' }, 'Carried leave expires on (MM-DD of the next year)', expiryIn, h('span', { class: 'small muted' }, 'Leave blank for no expiry.'))),
+    saveBtn('Save carry-forward rules', () => {
+      const ex = expiryIn.value.trim();
+      if (ex && !/^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(ex)) { toast('Expiry must look like 06-30.', 'error'); return; }
+      cf.expiry = ex || null;
+      cf.buyback_options = optsIn.value.split(',').map((x) => Number(x.trim())).filter((x) => x > 0 && x <= 100);
+      save('carry_forward', cf, 'Carry-forward rules');
+    })));
+
+  // part-time
+  const pt = structuredClone(P.part_time?.value || { full_time_weekly_hours: 45, prorate: ['AL', 'SL'] });
+  el.append(panel('Part-time staff', 'Annual and sick leave for part-timers = full-time days × their weekly hours ÷ full-time weekly hours, rounded half up. Set each part-timer’s weekly hours in their Employment tab.',
+    h('label', { class: 'check-row' }, 'Full-time weekly hours', n(pt.full_time_weekly_hours, (v) => { pt.full_time_weekly_hours = v; })),
+    saveBtn('Save part-time rule', () => save('part_time', pt, 'Part-time rule'))));
 }

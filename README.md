@@ -3,7 +3,7 @@
 Payroll app for MyEden Group, rebuilt from the MEG-EPPD 2026 workbook.
 Static site (GitHub Pages) + Supabase. No build step.
 
-**Current version:** v2026.10.09-11:30 · **Phase 2 – Employees**
+**Current version:** v2026.10.09-14:45 · **Phase 3 – Leave & time**
 
 ## First-time setup
 
@@ -16,6 +16,7 @@ Run these **in order**. Each file is safe to re-run.
 | `sql/002_seed_masterdata.sql` | Companies, departments, job titles, pick-lists, payment types, policies. Never overwrites your edits. |
 | `sql/003_seed_statutory.sql` | EPF / SOCSO / EIS tables from the workbook (8 versions, 1,133 rows). |
 | `sql/004_employees.sql` | Phase 2: employees, employment periods, paying companies, salary history, allowances, Employee ID generator, workbook import. |
+| `sql/005_leave_time.sql` | Phase 3: leave records, balance adjustments, KPI grades, year-end close, overtime & part-time hours, OTCF links; working-week, leave, carry-forward and part-time policies. |
 
 `sql/reset_employees.sql` is **not** part of setup. It deletes every employee record so the one-time
 workbook import can be run again before going live.
@@ -37,7 +38,19 @@ People › Import from workbook › choose the MEG-EPPD .xlsm. The file is read 
 cleaned records are saved. Review the preview (decisions, checks, salary-history match), then press Import.
 It runs once, all-or-nothing.
 
-### 5. After first sign-in
+### 5. Import leave and hours (admin)
+Time & leave › Import leave › choose the same .xlsm. Reads this year's leave, replacement leave, AL buy-back,
+overtime and part-time hours from ALMC_PT_2025, last year's brought-forward balance from StaffPersonalData,
+and checks the result against the latest month of PayrollSMRY2026. Re-running replaces only what came from the
+workbook; leave and hours entered in the app are kept. Then add **weekly hours** for each part-timer
+(Employee › Employment) so their leave is pro-rated.
+
+### 6. Overtime from OTCF
+Time & leave › Overtime & hours › Pull approved OTCF claims. Sign in with a MEG-FORMS **admin or approver**
+account (the OTCF database only lets those roles read every claim). Names are matched to employees; any you
+match by hand are remembered. Pulled lines can be edited or deleted, and pulling again never duplicates.
+
+### 7. After first sign-in
 Work through the checklist on the Overview page: upload the four logos, fill in employer numbers,
 paste the year's public holidays, review payment-type switches, approve users.
 
@@ -48,19 +61,20 @@ Access is separate from MyPRSys even though both use the same Supabase login.
 | Role | Can do |
 |---|---|
 | admin | Everything, including statutory tables, payment types, policies, users |
-| hr | Employees incl. NRIC, bank, salary and allowances; companies, departments, job titles, pick-lists, holidays |
+| hr | Employees incl. NRIC, bank, salary and allowances; leave, balances, year-end close, overtime; companies, departments, job titles, pick-lists, holidays |
 | approver | Employee names and jobs only (payroll approval arrives in Phase 4) |
 | viewer | Employee names and jobs only |
 
 NRIC, date of birth, address, bank, EPF/SOCSO/tax numbers, salary history and allowances are stored in
-separate tables that only admin and HR can read. The database enforces this, not just the screens.
+separate tables that only admin and HR can read. All leave, KPI and overtime data is admin/HR only too.
+The database enforces this, not just the screens.
 
 ## Project layout
 ```
 index.html            app shell
 css/app.css           all styles (light + dark)
 js/version.js         VERSION — the only place the UVN is set
-js/config.js          Supabase URL + anon key
+js/config.js          Supabase URL + anon key (also MEG-FORMS, for OTCF)
 js/app.js             sign-in flow, sidebar, router
 js/engines/           pure calculation code (tested in Node)
 js/modules/           one file per screen
@@ -83,6 +97,15 @@ Its fixture contains real salaries, so it is **git-ignored** and skipped automat
 2. Note the change below.
 
 ## Change log
+- **v2026.10.09-14:45** — Phase 3: leave & time. Leave records (HR/admin; working days counted automatically,
+  skipping Saturday off days, Sunday rest days and public holidays; half days; override), leave balances for every type
+  (AL by service band with the workbook's month rule; sick 14/18/22, hospitalisation 60 incl. sick, maternity 98,
+  paternity 7 per the Employment Act; compassionate 2 per occasion / 4 a year; replacement leave earned and taken;
+  unpaid), manual adjustments, CSV export, AL calculator, part-time pro-rating by weekly hours, year-end close with
+  KPI grades (E 6 · S 3 · A 1 · I 0 · U 0 days carried, confirmed staff only), buy-back of the excess for E/S/A at
+  50/25/10 % or a custom rate, optional expiry of carried leave, overtime & hours by Employment Act category with
+  OTCF pull from MEG-FORMS, one-time leave import from the workbook with a reconciliation check, Leave tab on each
+  employee, new policy editors (working week, leave entitlements, carry forward, part-time).
 - **v2026.10.09-11:30** — Phase 2: employees. Employee list (search, status/company/department filters, CSV export),
   profile (personal, identity & bank, employment periods incl. rehires, resignation with contract notice periods,
   pay: paying companies, statutory switches, effective-dated salary history incl. hourly rates, allowances with end dates),

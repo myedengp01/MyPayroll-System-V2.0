@@ -21,6 +21,17 @@ function append(el, children) {
     el.appendChild(c instanceof Node ? c : document.createTextNode(String(c)));
   }
 }
+// Native el.append(null) inserts the text "null". Pages build optional pieces as `cond ? node : null`,
+// so make append()/prepend() skip empty values the same way h() does.
+for (const proto of [Element.prototype, DocumentFragment.prototype]) {
+  for (const name of ['append', 'prepend']) {
+    const orig = proto[name];
+    if (orig.__eppd) continue;
+    const patched = function (...nodes) { return orig.apply(this, nodes.flat(Infinity).filter((n) => n !== null && n !== undefined && n !== false)); };
+    patched.__eppd = true;
+    proto[name] = patched;
+  }
+}
 export const clear = (el) => { while (el.firstChild) el.removeChild(el.firstChild); return el; };
 
 export function toast(message, type = 'info', ms = 3500) {
