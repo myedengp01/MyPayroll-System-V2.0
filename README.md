@@ -3,7 +3,7 @@
 Payroll app for MyEden Group, rebuilt from the MEG-EPPD 2026 workbook.
 Static site (GitHub Pages) + Supabase. No build step.
 
-**Current version:** v2026.10.09-19:30 · **Phase 4 – Monthly payroll**
+**Current version:** v2026.10.09-19:45 · **Phase 5 – Payslips & reports**
 
 ## First-time setup
 
@@ -71,7 +71,20 @@ Pay rules (Settings › HR policies › Payroll): daily rate = basic ÷ 26, hour
 / × 2 per extra hour, public holiday 2 days / × 3 per extra hour. Unpaid leave and part months use calendar days.
 EPF / SOCSO / EIS follow each payment type's switches and each person's paying-company switches.
 
-### 9. After first sign-in
+### 9. Payslips & reports (admin + HR)
+Payroll › Payslips & reports, for any **finalised** month:
+- **Payslips**: one A4 page per person per paying company (logo, earnings, deductions, employer contributions,
+  year to date, leave balances). "Print all" or one person; choose "Save as PDF" in the print window.
+- **Monthly summary** (on screen + Excel, one sheet per company), **Payment list** (bank, account no., net pay per
+  company; print or Excel), **EPF**, **SOCSO & EIS** and **PCB** lists per company to key into the portals,
+  flagging missing EPF / tax numbers and bank accounts.
+- **Year to date** per person per company (Excel).
+- **EA forms** (Borang EA, C.P.8A) per person per paying company: B1(a) basic, overtime, leave pay less unpaid
+  leave · B1(b) commission, incentives, bonus · B1(c) allowances, gifts, perquisites · F items whose payment type is
+  not subject to PCB · D1 PCB · E1 EPF and E2 PERKESO (SOCSO + EIS) employee shares. Fill in each company's
+  LHDN E number and each employee's tax number first; ask your tax agent to confirm the allowance treatment.
+
+### 10. After first sign-in
 Work through the checklist on the Overview page: upload the four logos, fill in employer numbers,
 paste the year's public holidays, review payment-type switches, approve users.
 
@@ -118,6 +131,9 @@ Its fixture contains real salaries, so it is **git-ignored** and skipped automat
 2. Note the change below.
 
 ## Change log
+- **v2026.10.09-19:45** — Phase 5: payslips & reports. Payslips (print / save as PDF, one or all), monthly summary
+  with Excel, salary payment list, EPF / SOCSO & EIS / PCB lists per company (print + Excel), year-to-date report,
+  EA forms (C.P.8A) with signatory, checks for missing EPF / tax / E numbers and bank accounts. No database change.
 - **v2026.10.09-19:30** — Former staff fix. Payroll leaves out anyone marked Resigned / Terminated / Dismissed who has
   no last working day, and names them on the payroll page. The Employment form has a Last working day field, required
   for those statuses (company assignments end on the same day). People › Former staff in the menu; status tabs show

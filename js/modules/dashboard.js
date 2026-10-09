@@ -50,7 +50,7 @@ export async function render(el, ctx) {
 
   el.append(
     pageHead(`Hello, ${ctx.me.display_name || ctx.me.email.split('@')[0]}`,
-      'Staff records, leave, overtime and monthly payroll are live. Payslips and statutory files arrive in the next phase.'),
+      'Staff records, leave, overtime, monthly payroll, payslips and reports are live.'),
     h('section', { class: 'panel' },
       h('div', { class: 'panel-head' }, h('h2', {}, 'Setup checklist')),
       h('ul', { class: 'checklist' }, items.map((i) => h('li', {},
@@ -64,8 +64,8 @@ export async function render(el, ctx) {
         ['Phase 2', 'Employees, Employee ID generator, salary & allowance history, Excel import', 'Live'],
         ['Phase 3', 'Leave & attendance, AL calculator, year-end close, OT and part-time hours (OTCF)', 'Live'],
         ['Phase 4', 'Monthly payroll: pay runs, overtime at Employment Act rates, statutory, finalise & lock, Jan–Sep 2026 history', 'Live'],
-        ['Phase 5', 'Payslips, monthly summary, statutory & bank files', 'Next'],
-        ['Phase 6', 'PCB, self-service, MEG-FORMS claims, final settlement, loans', ''],
+        ['Phase 5', 'Payslips (PDF), monthly summary, payment list, EPF / SOCSO & EIS / PCB lists, year to date, EA forms', 'Live'],
+        ['Phase 6', 'PCB, self-service, MEG-FORMS claims, final settlement, loans', 'Next'],
       ].map(([p, t, s]) => h('div', {}, h('b', {}, p), h('span', {}, t),
         s ? h('span', { class: `tag ${s === 'Live' ? 'ok' : 'warn'}` }, s) : h('span', {}))))));
 }
