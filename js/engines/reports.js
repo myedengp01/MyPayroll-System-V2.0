@@ -9,7 +9,7 @@ const ORDER = ['BASIC', 'ALLOW_A1', 'ALLOW_A2', 'ALLOW_A3', 'LEADER', 'FIRST_AID
   'FULL_ATT', 'REFERRAL', 'BONUS', 'ANG_BAO', 'AL_BUYBACK', 'OT_NORMAL', 'OT_RESTDAY', 'OT_PH', 'UNPAID_LEAVE', 'CHILDCARE', 'LOAN', 'OTHER_DED'];
 const orderOf = (code, sortOrder) => { const i = ORDER.indexOf(code); return i >= 0 ? i : 100 + (sortOrder ?? 0); };
 const isPersonal = (i) => i.kind === 'deduction' && i.category === 'personal';
-export const STAT_SUM_KEYS = ['gross', 'epf_ee', 'epf_er', 'socso_ee', 'socso_er', 'eis_ee', 'eis_er', 'pcb', 'net', 'personal_deductions', 'net_paid'];
+export const STAT_SUM_KEYS = ['gross', 'epf_ee', 'epf_er', 'socso_ee', 'socso_er', 'eis_ee', 'eis_er', 'pcb', 'net', 'personal_deductions', 'reimbursements', 'net_paid'];
 
 /** Lines that count: not left out. */
 export const paidLines = (lines) => (lines || []).filter((l) => !l.excluded);
@@ -24,16 +24,16 @@ export function sumLines(lines) {
 
 /** Items of a line grouped for a payslip, same-label items added together (e.g. two OT lines of one type stay separate by label). */
 export function payslipSections(line) {
-  const earn = new Map(), ded = new Map(), pers = new Map();
+  const earn = new Map(), ded = new Map(), pers = new Map(), claims = new Map();
   for (const i of line.items || []) {
     const a = itemAmount(i); if (!a) continue;
-    const target = i.kind === 'earning' ? earn : isPersonal(i) ? pers : ded;
+    const target = i.category === 'reimbursement' ? claims : i.kind === 'earning' ? earn : isPersonal(i) ? pers : ded;
     const key = i.label || i.code;
     const prev = target.get(key);
     target.set(key, { label: key, code: i.code, amount: r2((prev?.amount || 0) + a), note: prev ? null : (i.note || null), order: orderOf(i.code) });
   }
   const sort = (m) => [...m.values()].sort((a, b) => a.order - b.order || a.label.localeCompare(b.label));
-  return { earnings: sort(earn), deductions: sort(ded), personal: sort(pers) };
+  return { earnings: sort(earn), deductions: sort(ded), personal: sort(pers), claims: sort(claims) };
 }
 
 /**
@@ -51,6 +51,7 @@ export function payslipModel(line, ytdLines = []) {
   const statEr = r2(statutory.reduce((x, r) => x + r.er, 0));
   const totalDeductions = r2(statEe + Number(line.pcb || 0) + Number(line.personal_deductions || 0));
   return { ...s, statutory, statEe, statEr, pcb: r2(line.pcb), gross: r2(line.gross), totalDeductions, net: r2(line.net), netPaid: r2(line.net_paid),
+    claimsTotal: r2(s.claims.reduce((x, c) => x + c.amount, 0)),
     ytd: sumLines(ytdLines) };
 }
 
@@ -79,7 +80,8 @@ export function itemsByCode(line) {
  *  null: not on the EA form (personal deductions)
  */
 export function eaSection(i) {
-  if (isPersonal(i)) return null;
+  if (isPersonal(i) || i.category === 'reimbursement') return null;   // claims are reimbursements, not income
+  if (i.kind === 'earning' && i.category === 'compensation') return '6';  // payment in lieu of notice: compensation for loss of employment
   if (i.kind === 'earning' && i.pcb_subject === false) return 'F';
   if (['basic', 'overtime', 'leave'].includes(i.category)) return '1a';
   if (['incentive', 'bonus'].includes(i.category)) return '1b';
@@ -97,22 +99,22 @@ export function eaFigures(lines) {
   for (const l of paidLines(lines)) {
     const key = `${l.employee_id}|${l.company_id || 0}`;
     const t = by.get(key) || { employee_id: l.employee_id, company_id: l.company_id || null, emp_name: l.emp_name, emp_code: l.emp_code,
-      months: 0, b1a: 0, b1b: 0, b1c: 0, f_exempt: 0, d1_pcb: 0, e1_epf: 0, e2_perkeso: 0, gross: 0, firstPeriod: l.period, lastPeriod: l.period };
+      months: 0, b1a: 0, b1b: 0, b1c: 0, b6: 0, f_exempt: 0, d1_pcb: 0, e1_epf: 0, e2_perkeso: 0, gross: 0, firstPeriod: l.period, lastPeriod: l.period };
     t.months += 1; t.emp_name = l.emp_name || t.emp_name; t.emp_code = l.emp_code || t.emp_code;
     if (l.period < t.firstPeriod) t.firstPeriod = l.period;
     if (l.period > t.lastPeriod) t.lastPeriod = l.period;
     for (const i of l.items || []) {
       const sec = eaSection(i); if (!sec) continue;
       const a = itemAmount(i) * (i.kind === 'deduction' ? -1 : 1);
-      if (sec === '1a') t.b1a += a; else if (sec === '1b') t.b1b += a; else if (sec === '1c') t.b1c += a; else if (sec === 'F') t.f_exempt += a;
+      if (sec === '1a') t.b1a += a; else if (sec === '1b') t.b1b += a; else if (sec === '1c') t.b1c += a; else if (sec === '6') t.b6 += a; else if (sec === 'F') t.f_exempt += a;
     }
     t.d1_pcb += Number(l.pcb) || 0; t.e1_epf += Number(l.epf_ee) || 0; t.e2_perkeso += (Number(l.socso_ee) || 0) + (Number(l.eis_ee) || 0);
     t.gross += Number(l.gross) || 0;
     by.set(key, t);
   }
   return [...by.values()].map((t) => {
-    for (const k of ['b1a', 'b1b', 'b1c', 'f_exempt', 'd1_pcb', 'e1_epf', 'e2_perkeso', 'gross']) t[k] = r2(t[k]);
-    t.totalB = r2(t.b1a + t.b1b + t.b1c);
+    for (const k of ['b1a', 'b1b', 'b1c', 'b6', 'f_exempt', 'd1_pcb', 'e1_epf', 'e2_perkeso', 'gross']) t[k] = r2(t[k]);
+    t.totalB = r2(t.b1a + t.b1b + t.b1c + t.b6);
     // a check: everything taxable on the form + exempt = gross pay
     t.balanced = Math.abs(r2(t.totalB + t.f_exempt) - t.gross) < 0.01;
     return t;

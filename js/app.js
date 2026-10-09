@@ -4,7 +4,7 @@ import { VERSION, APP_NAME } from './version.js';
 import { h, clear, toast, logoTile } from './ui.js';
 
 const root = document.getElementById('app');
-const state = { session: null, me: null, brand: [], recovery: false };
+const state = { session: null, me: null, brand: [], recovery: false, modules: {} };
 
 // ---------------------------------------------------------------- routes
 const ROUTES = {
@@ -23,6 +23,9 @@ const ROUTES = {
   'payroll':                { label: 'Monthly payroll',        load: () => import('./modules/payroll.js'), roles: ['admin', 'hr'] },
   'payroll/:period':        { label: 'Monthly payroll',        load: () => import('./modules/payroll.js'), roles: ['admin', 'hr'], menu: 'payroll' },
   'reports':                { label: 'Payslips & reports',     load: () => import('./modules/reports.js'), roles: ['admin', 'hr'] },
+  'claims':                 { label: 'MEG-FORMS claims',       load: () => import('./modules/claims.js'), roles: ['admin', 'hr'], module: 'claims' },
+  'loans':                  { label: 'Company loans',          load: () => import('./modules/loans.js'), roles: ['admin', 'hr'], module: 'loans' },
+  'settlements':            { label: 'Final settlement',       load: () => import('./modules/settlements.js'), roles: ['admin', 'hr'], module: 'settlement' },
   'payroll/import':         { label: 'Import past months',     load: () => import('./modules/payimportpage.js'), roles: ['admin'] },
   'settings/companies':     { label: 'Companies',              load: () => import('./modules/companies.js') },
   'settings/org':           { label: 'Departments & job titles', load: () => import('./modules/org.js') },
@@ -38,7 +41,7 @@ const MENU = [
   { group: null, items: ['dashboard'] },
   { group: 'People', items: ['employees', 'employees/former', 'employees/ids', 'employees/import'] },
   { group: 'Time & leave', items: ['leave', 'leave/balances', 'leave/al-calculator', 'leave/year-end', 'time', 'leave/import'] },
-  { group: 'Payroll', items: ['payroll', 'reports', 'payroll/import'] },
+  { group: 'Payroll', items: ['payroll', 'reports', 'claims', 'loans', 'settlements', 'payroll/import'] },
   { group: 'Settings', items: ['settings/companies', 'settings/org', 'settings/lists', 'settings/payment-types',
     'settings/statutory', 'settings/holidays', 'settings/policies', 'settings/users', 'settings/audit'] },
 ];
@@ -62,6 +65,8 @@ function matchRoute(hash) {
 const can = (roles) => !!state.me && state.me.status === 'active' && roles.includes(state.me.role);
 const ctx = {
   sb, can, VERSION,
+  get modules() { return state.modules; },
+  async reloadModules() { await loadModules(); renderShell(); },
   get me() { return state.me; },
   get session() { return state.session; },
   get brand() { return state.brand; },
@@ -99,8 +104,16 @@ async function route() {
   state.me = await loadOrRegisterMe();
   if (!state.me) { renderAuth('login', 'Could not load your access record. Please try again.'); return; }
   if (state.me.status !== 'active') { renderPending(); return; }
+  await loadModules();
   renderShell();
 }
+
+/** Optional modules (Phase 6), switched on in Settings › HR policies. */
+async function loadModules() {
+  try { const { data } = await sb.from('eppd_policies').select('value').eq('key', 'modules').maybeSingle(); state.modules = data?.value || {}; }
+  catch { state.modules = {}; }
+}
+const moduleOn = (m) => (!m ? true : m === 'claims' ? !!state.modules.claims?.enabled : !!state.modules[m]);
 
 async function loadOrRegisterMe() {
   const u = state.session.user;
@@ -258,6 +271,7 @@ function renderShell() {
     for (const key of g.items || []) {
       const r = ROUTES[key];
       if (r.roles && !can(r.roles)) continue;
+      if (!moduleOn(r.module)) continue;
       nav.append(h('a', { href: `#/${key}`, dataset: { route: key } }, r.label));
     }
     for (const [label, phase] of g.soon || []) nav.append(h('div', { class: 'soon' }, label, h('span', { class: 'tag' }, phase)));
@@ -288,7 +302,7 @@ function renderShell() {
 let renderToken = 0;
 async function renderPage() {
   const m = matchRoute(location.hash);
-  const allowed = ROUTES[m.key] && (!ROUTES[m.key].roles || can(ROUTES[m.key].roles));
+  const allowed = ROUTES[m.key] && (!ROUTES[m.key].roles || can(ROUTES[m.key].roles)) && moduleOn(ROUTES[m.key].module);
   const key = allowed ? m.key : 'dashboard';
   const r = ROUTES[key];
   const menuKey = r.menu || key;

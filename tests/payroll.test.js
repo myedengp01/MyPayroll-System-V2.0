@@ -12,6 +12,15 @@ import { buildImport } from '../js/engines/importer.js';
 const fx = (f) => JSON.parse(readFileSync(new URL(`./fixtures/${f}`, import.meta.url)));
 const tables = prepareTables(fx('stat_tables.json'));
 const typeRows = fx('payment_types.json');
+const extraTypes = [
+  { id: 101, code: 'ZAKAT', name: 'Zakat (salary deduction)', kind: 'deduction', category: 'personal', subject_epf: false, subject_socso: false, subject_eis: false, subject_pcb: false },
+  { id: 102, code: 'CLAIM_SCF', name: 'Staff claim (SCF)', kind: 'earning', category: 'reimbursement', subject_epf: false, subject_socso: false, subject_eis: false, subject_pcb: false },
+  { id: 103, code: 'CLAIM_MTCF', name: 'Mileage claim (MTCF)', kind: 'earning', category: 'reimbursement', subject_epf: false, subject_socso: false, subject_eis: false, subject_pcb: false },
+  { id: 104, code: 'NOTICE_PAY', name: 'Payment in lieu of notice', kind: 'earning', category: 'compensation', subject_epf: false, subject_socso: false, subject_eis: false, subject_pcb: true },
+  { id: 105, code: 'NOTICE_SHORT', name: 'Notice period not served', kind: 'deduction', category: 'personal', subject_epf: false, subject_socso: false, subject_eis: false, subject_pcb: false },
+  { id: 106, code: 'AL_ENCASH', name: 'Unused annual leave paid out', kind: 'earning', category: 'leave', subject_epf: true, subject_socso: true, subject_eis: true, subject_pcb: true },
+];
+typeRows.push(...extraTypes);
 const types = new Map(typeRows.map((t) => [t.code, t]));
 const typesById = new Map(typeRows.map((t) => [t.id, t]));
 const em = (o = {}) => ({ join_date: '2020-01-01', resigned_date: null, work_from: '09:00', work_to: '18:00', meal_hours: 1, ot_multiplier: 1.5, ...o });
@@ -236,4 +245,74 @@ test('marked as left with no last working day: left out of the run, with a notic
   person.employments[0].resigned_date = '2026-09-04';
   const r2 = buildRun({ period: '2026-09-01', people: [person], types, typesById, tables, policies: {}, confMeta });
   assert.equal(amt(r2.lines[0].items, 'BASIC'), 333.33);   // 2500 ÷ 30 × 4
+});
+
+
+// ------------------------------------------------------------------ Phase 6
+const p6person = (o = {}) => ({ id: 7, full_name: 'PHASE SIX', dob: '1990-01-01', statClass: 'MY', employments: [{ ...em(o.em || {}), id: 70,
+  assignments: [{ id: 71, company_id: 1, is_primary: true, salary_history: [sal(o.salary || 5200)], allowances: [] }] }] });
+const MODS = { pcb_auto: true, claims: { enabled: true, scf: true, mtcf: false }, loans: true, settlement: true };
+
+test('claims are paid on top of net pay: no EPF/SOCSO/EIS/PCB, not in gross; switched-off forms are ignored', () => {
+  const D = { period: '2026-10-01', people: [p6person()], types, typesById, tables, policies: { modules: { claims: MODS.claims } },
+    claims: [{ id: 1, employee_id: 7, form_code: 'scf', serial_no: 'SCF-01', amount: 120.5, pay_period: '2026-10-01', status: 'active' },
+      { id: 2, employee_id: 7, form_code: 'mtcf', serial_no: 'MT-01', amount: 80, pay_period: '2026-10-01', status: 'active' },
+      { id: 3, employee_id: 7, form_code: 'scf', amount: 50, pay_period: '2026-11-01', status: 'active' }] };
+  const l = buildRun(D).lines[0];
+  assert.deepEqual(l.items.filter((i) => i.category === 'reimbursement').map((i) => i.amount), [120.5]);
+  assert.equal(l.gross, 5200); assert.equal(l.epf_wage, 5200); assert.equal(l.reimbursements, 120.5);
+  assert.equal(l.net_paid, r2(l.net + 120.5));
+  assert.equal(lineSummary(l).claims, 120.5); assert.equal(lineSummary(l).other, 0);
+});
+
+test('loans: monthly instalment until repaid, then nothing', () => {
+  const loan = { id: 9, employee_id: 7, company_id: null, principal: 1000, monthly_instalment: 300, start_period: '2026-08-01', status: 'active' };
+  const run = (repaid) => buildRun({ period: '2026-10-01', people: [p6person()], types, typesById, tables, policies: { modules: { loans: true } }, loans: [{ ...loan, repaid }] }).lines[0];
+  assert.equal(amt(run(600).items, 'LOAN:9'), 300);
+  assert.equal(amt(run(900).items, 'LOAN:9'), 100);          // last instalment = balance
+  assert.equal(amt(run(1000).items, 'LOAN:9'), undefined);   // repaid
+  const l = run(600); assert.equal(l.personal_deductions, 300); assert.equal(l.gross, 5200);
+});
+
+test('final settlement: unused AL paid at the daily rate, notice pay in lieu, full loan balance recovered', () => {
+  const person = p6person({ em: { resigned_date: '2026-10-15' } });
+  const D = { period: '2026-10-01', people: [person], types, typesById, tables, policies: { modules: { settlement: true, loans: true } },
+    leaverAL: new Map([[7, 4.5]]), settlements: new Map([[70, { al_mode: 'auto', notice_mode: 'employer_pays', notice_days: 6, recover_loans: true }]]),
+    loans: [{ id: 9, employee_id: 7, principal: 1000, monthly_instalment: 300, start_period: '2026-08-01', status: 'active', repaid: 600 }] };
+  const l = buildRun(D).lines[0];
+  assert.equal(amt(l.items, 'SETTLE:AL'), 900);              // 4.5 days × 5200 ÷ 26 = 200
+  assert.equal(amt(l.items, 'SETTLE:NOTICE'), 1200);         // 6 days × 200
+  assert.equal(amt(l.items, 'LOAN:9'), 400);                 // whole balance
+  // leave taken in advance is deducted; HR can switch AL off or type a custom amount
+  D.leaverAL = new Map([[7, -2]]);
+  assert.equal(buildRun(D).lines[0].items.find((i) => i.key === 'SETTLE:AL').code, 'UNPAID_LEAVE');
+  D.settlements = new Map([[70, { al_mode: 'none' }]]);
+  assert.equal(amt(buildRun(D).lines[0].items, 'SETTLE:AL'), undefined);
+  D.settlements = new Map([[70, { al_mode: 'custom', al_amount: 333 }]]);
+  assert.equal(amt(buildRun(D).lines[0].items, 'SETTLE:AL'), 333);
+  // not leaving this month → no settlement items
+  D.period = '2026-09-01';
+  assert.ok(!buildRun(D).lines[0].items.some((i) => String(i.key).startsWith('SETTLE')));
+});
+
+test('automatic PCB on a line; manual tax details or a typed amount win; zakat reduces PCB', () => {
+  const pol = { modules: { pcb_auto: true }, pcb: { socso_relief: false } };
+  const D = { period: '2026-01-01', people: [p6person({ salary: 5000 })], types, typesById, tables, policies: pol, yearLines: [] };
+  const l = buildRun(D).lines[0];
+  assert.equal(l.epf_ee, 550); assert.equal(l.pcb, 110);
+  assert.ok(l.inputs.pcb.result.detail.length > 1);
+  // typed amount for this month wins, and survives Recalculate
+  l.overrides = { pcb: 95 }; const again = buildRun({ ...D, existing: [l] }).lines[0];
+  assert.equal(again.pcb, 95);
+  // manual PCB person: auto off, the line keeps what HR types
+  const man = buildRun({ ...D, taxProfiles: new Map([[7, { pcb_manual: true }]]) }).lines[0];
+  assert.equal(man.inputs.pcb, undefined); assert.equal(man.pcb, 0);
+  // zakat RM50 a month: deducted from pay and from PCB
+  const z = buildRun({ ...D, taxProfiles: new Map([[7, { category: 1, zakat_monthly: 50 }]]) }).lines[0];
+  assert.equal(amt(z.items, 'ZAKAT'), 50); assert.equal(z.pcb, 60);
+  assert.equal(z.net_paid, r2(5000 - z.epf_ee - z.socso_ee - z.eis_ee - 60 - 50));
+  // recompute after an edit (bonus added) keeps automatic PCB
+  const b = { ...l, overrides: {}, items: [...l.items, itemFromType(types.get('BONUS'), { auto: false, amount: 5000 })] };
+  const rb = recomputeLine(b, D);
+  assert.ok(rb.pcb > 110, String(rb.pcb));
 });

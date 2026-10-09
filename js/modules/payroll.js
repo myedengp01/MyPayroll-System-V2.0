@@ -53,7 +53,7 @@ async function renderRun(el, ctx, param) {
   if (locked) lines = run.lines;
   else {
     const res = buildRun(D);
-    lines = res.lines; notices = res.notices || [];
+    lines = res.lines; notices = [...(D.phase6Errors || []).map((e) => `Could not load ${e}. Check that sql/008_phase6.sql has been run.`), ...(res.notices || [])];
     if (!run) dirty = true;
     else {
       const before = JSON.stringify(runTotals(run.lines).all), after = JSON.stringify(runTotals(lines).all);
@@ -127,7 +127,8 @@ async function renderRun(el, ctx, param) {
           h('td', { class: 'num' }, money(s.basic)), h('td', { class: 'num' }, s.overtime ? money(s.overtime) : ''), h('td', { class: 'num' }, s.other ? money(s.other) : ''),
           h('td', { class: 'num' }, s.unpaid ? `−${money(s.unpaid)}` : ''), h('td', { class: 'num' }, money(l.gross)),
           h('td', { class: 'num' }, money(l.epf_ee)), h('td', { class: 'num' }, money(l.socso_ee)), h('td', { class: 'num' }, money(l.eis_ee)),
-          h('td', { class: 'num' }, l.pcb ? money(l.pcb) : ''), h('td', { class: 'num strong' }, money(l.net_paid)));
+          h('td', { class: 'num' }, l.pcb ? money(l.pcb) : '', l.inputs?.pcb?.auto && !(l.overrides?.pcb !== undefined && l.overrides?.pcb !== null && l.overrides?.pcb !== '') ? h('div', { class: 'small muted' }, 'auto') : null),
+          h('td', { class: 'num strong' }, money(l.net_paid), s.claims ? h('div', { class: 'small muted' }, `incl. claims ${money(s.claims)}`) : null));
         tr.addEventListener('click', () => openLine(l));
         return tr;
       }) : h('tr', {}, h('td', { colspan: 12, class: 'muted' }, lines.length ? 'No lines match.' : 'Nobody is employed in this month.')))));
@@ -150,7 +151,7 @@ async function renderRun(el, ctx, param) {
   const dbLine = (l) => ({ employee_id: l.employee_id, assignment_id: l.assignment_id, company_id: l.company_id, emp_name: l.emp_name, emp_code: l.emp_code,
     mode: l.mode || 'auto', excluded: !!l.excluded, items: l.items, overrides: l.overrides || {}, inputs: l.inputs || {}, warnings: l.warnings || [], note: l.note || null,
     gross: l.gross, epf_wage: l.epf_wage, socso_wage: l.socso_wage, eis_wage: l.eis_wage, ...Object.fromEntries(STAT_KEYS.map((k) => [k, l[k]])),
-    pcb: l.pcb, net: l.net, personal_deductions: l.personal_deductions, net_paid: l.net_paid });
+    pcb: l.pcb, net: l.net, personal_deductions: l.personal_deductions, reimbursements: l.reimbursements || 0, net_paid: l.net_paid });
   async function saveRun(quiet = false) {
     const { data, error } = await ctx.sb.rpc('eppd_save_pay_run', { p: { period: D.period, notes: run?.notes || null, totals: runTotals(lines), lines: lines.map(dbLine),
       expected_updated_at: run?.updated_at || null } });
@@ -189,8 +190,8 @@ async function renderRun(el, ctx, param) {
   }
   function reload() { window.removeEventListener('beforeunload', leaveGuard); window.dispatchEvent(new HashChangeEvent('hashchange')); }
   function exportCsv() {
-    const cols = ['Employee ID', 'Name', 'Company', 'Basic', 'Overtime', 'Other pay', 'Unpaid leave', 'Gross', 'EPF wage', 'EPF ee', 'EPF er', 'SOCSO wage', 'SOCSO ee', 'SOCSO er', 'EIS wage', 'EIS ee', 'EIS er', 'PCB', 'Net', 'Personal deductions', 'Net paid', 'Left out', 'Warnings'];
-    const rows = lines.map((l) => { const s = lineSummary(l); return [l.emp_code || '', l.emp_name, companyName(l.company_id), s.basic, s.overtime, s.other, s.unpaid, l.gross, l.epf_wage, l.epf_ee, l.epf_er, l.socso_wage, l.socso_ee, l.socso_er, l.eis_wage, l.eis_ee, l.eis_er, l.pcb, l.net, l.personal_deductions, l.net_paid, l.excluded ? 'Yes' : '', (l.warnings || []).map((w) => w.text).join(' | ')]; });
+    const cols = ['Employee ID', 'Name', 'Company', 'Basic', 'Overtime', 'Other pay', 'Unpaid leave', 'Gross', 'EPF wage', 'EPF ee', 'EPF er', 'SOCSO wage', 'SOCSO ee', 'SOCSO er', 'EIS wage', 'EIS ee', 'EIS er', 'PCB', 'Net', 'Personal deductions', 'Claims', 'Net paid', 'Left out', 'Warnings'];
+    const rows = lines.map((l) => { const s = lineSummary(l); return [l.emp_code || '', l.emp_name, companyName(l.company_id), s.basic, s.overtime, s.other, s.unpaid, l.gross, l.epf_wage, l.epf_ee, l.epf_er, l.socso_wage, l.socso_ee, l.socso_er, l.eis_wage, l.eis_ee, l.eis_er, l.pcb, l.net, l.personal_deductions, s.claims, l.net_paid, l.excluded ? 'Yes' : '', (l.warnings || []).map((w) => w.text).join(' | ')]; });
     const csv = [cols, ...rows].map((r) => r.map((v) => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; }).join(',')).join('\r\n');
     const a = h('a', { href: URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv' })), download: `payroll_${ym(D.period)}.csv` }); document.body.append(a); a.click(); a.remove();
   }
@@ -253,8 +254,21 @@ async function renderRun(el, ctx, param) {
         return h('tr', {}, h('td', {}, label, off ? h('div', { class: 'small muted' }, `switched off: ${[inp.flags[`${k}_ee`] === false ? 'employee' : null, inp.flags[`${k}_er`] === false ? 'employer' : null].filter(Boolean).join(' & ')}`) : null),
           h('td', { class: 'num' }, money(wage)), cellFor('ee'), cellFor('er'));
       });
-      const pcbIn = h('input', { type: 'number', step: '0.01', value: L.pcb || '', placeholder: '0.00', 'aria-label': 'PCB', style: 'width:8rem;text-align:right', disabled: ro || L.mode === 'fixed' });
-      pcbIn.addEventListener('change', () => { L.pcb = Number(pcbIn.value) || 0; redraw(); });
+      const autoPcb = !!L.inputs?.pcb?.auto && L.mode !== 'fixed';
+      const typedPcb = L.overrides?.pcb !== undefined && L.overrides?.pcb !== null && L.overrides?.pcb !== '';
+      const pcbIn = h('input', { type: 'number', step: '0.01', value: autoPcb ? (typedPcb ? L.overrides.pcb : '') : (L.pcb || ''), placeholder: autoPcb ? money(L.pcb) : '0.00',
+        'aria-label': 'PCB', style: 'width:8rem;text-align:right', disabled: ro || L.mode === 'fixed' });
+      pcbIn.addEventListener('change', () => {
+        if (autoPcb) { L.overrides = { ...(L.overrides || {}) }; if (pcbIn.value === '') delete L.overrides.pcb; else L.overrides.pcb = Number(pcbIn.value) || 0; }
+        else L.pcb = Number(pcbIn.value) || 0;
+        redraw();
+      });
+      const pcbRes = L.inputs?.pcb?.result;
+      const pcbLabel = autoPcb ? h('div', {}, h('label', {}, typedPcb ? 'PCB (typed for this month)' : 'PCB (automatic)'),
+        typedPcb && !ro ? h('div', {}, h('button', { class: 'linkish small', type: 'button', onclick: () => { delete L.overrides.pcb; redraw(); } }, 'Use automatic PCB')) : null)
+        : h('label', {}, 'PCB (from the LHDN calculator)');
+      const pcbWorking = autoPcb && pcbRes && !typedPcb ? h('details', { class: 'pcb-calc' }, h('summary', { class: 'linkish' }, 'How PCB was worked out'),
+        h('ul', { style: 'margin:.4rem 0 0 1rem' }, pcbRes.detail.map((t) => h('li', {}, t)))) : null;
       const excl = switchToggle(L.excluded, (v) => { L.excluded = v; }, { label: 'Leave out of this month', disabled: ro });
       const noteIn = h('textarea', { 'aria-label': 'Note', rows: 2, disabled: ro, placeholder: 'Note for this month (optional)' }); noteIn.value = L.note || '';
       noteIn.addEventListener('change', () => { L.note = noteIn.value.trim() || null; });
@@ -269,7 +283,7 @@ async function renderRun(el, ctx, param) {
         (L.warnings || []).length ? h('ul', { class: 'setup-warning', style: 'margin-bottom:1rem;padding-left:1.8rem' }, L.warnings.map((w) => h('li', {}, w.text))) : null,
         h('div', { class: 'table-wrap' }, h('table', { class: 'data' },
           h('thead', {}, h('tr', {}, h('th', {}, 'Item'), h('th', {}, 'Details'), h('th', { class: 'num' }, 'Amount (RM)'), h('th', {}))),
-          h('tbody', {}, ...section('Earnings', g.earnings, ''), ...section('Deductions before statutory', g.deductions, '−'), ...section('Personal deductions', g.personal, '−')))),
+          h('tbody', {}, ...section('Earnings', g.earnings, ''), ...section('Deductions before statutory', g.deductions, '−'), ...section('Personal deductions', g.personal, '−'), ...section('Claims paid with the salary', g.claims || [], '+')))),
         addRow,
         h('div', { class: 'grid-2', style: 'margin-top:1rem;gap:1.2rem;align-items:start' },
           h('div', {}, h('h3', { style: 'margin-bottom:.4rem' }, 'Statutory'),
@@ -279,10 +293,11 @@ async function renderRun(el, ctx, param) {
             h('table', { class: 'data' }, h('tbody', {},
               h('tr', {}, h('td', {}, 'Gross pay'), h('td', { class: 'num' }, money(L.gross))),
               h('tr', {}, h('td', {}, 'EPF + SOCSO + EIS (employee)'), h('td', { class: 'num' }, `−${money(L.epf_ee + L.socso_ee + L.eis_ee)}`)),
-              h('tr', {}, h('td', {}, h('label', {}, 'PCB (from the LHDN calculator)')), h('td', { class: 'num' }, pcbIn)),
+              h('tr', {}, h('td', {}, pcbLabel), h('td', { class: 'num' }, pcbIn)),
               h('tr', {}, h('td', { class: 'strong' }, 'Net pay'), h('td', { class: 'num strong' }, money(L.net))),
               L.personal_deductions ? h('tr', {}, h('td', {}, 'Personal deductions'), h('td', { class: 'num' }, `−${money(L.personal_deductions)}`)) : null,
-              h('tr', {}, h('td', { class: 'strong' }, 'Paid to employee'), h('td', { class: 'num strong' }, money(L.net_paid))))))),
+              L.reimbursements ? h('tr', {}, h('td', {}, 'Claims reimbursed'), h('td', { class: 'num' }, `+${money(L.reimbursements)}`)) : null,
+              h('tr', {}, h('td', { class: 'strong' }, 'Paid to employee'), h('td', { class: 'num strong' }, money(L.net_paid))))), pcbWorking)),
         h('div', { style: 'margin-top:1rem;display:grid;gap:.6rem' }, h('label', { class: 'check-row' }, excl, 'Leave this line out of the month (not paid, not counted)'), noteIn),
         h('p', { class: 'small', style: 'margin-top:.6rem' }, h('a', { href: `#/employees/${L.employee_id}?tab=pay` }, 'Open employee profile ›')));
     };

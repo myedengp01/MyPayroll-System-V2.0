@@ -9,6 +9,7 @@
 import { computeEPF, computeSOCSO, computeEIS, statutoryBases } from './statutory.js';
 import { salaryForMonth, allowancesForMonth, lastDayOfMonth, isoToMs, addDays } from './employee.js';
 import { normalHours, OT_CATEGORIES } from './ot.js';
+import { computePCB, taxablePay, pcbYtd, pcbPolicy } from './pcb.js';
 
 export const r2 = (x) => Math.round((Number(x) + Number.EPSILON) * 100) / 100;
 const DAY = 86400000;
@@ -158,6 +159,40 @@ export function buildAutoItems(ctx) {
       note: `${b.days} day(s) × RM${fmt(R.orp)} × ${b.buyback_pct || 100}% (${b.close_year} year-end close)` });
   }
 
+  // ---- Phase 6: MEG-FORMS claims (paid on top of net pay) ----
+  for (const c of ctx.claims || []) {
+    const code = c.form_code === 'mtcf' ? 'CLAIM_MTCF' : 'CLAIM_SCF';
+    add(code, { key: `CLAIM:${c.id}`, label: `${T(code)?.name || code}${c.serial_no ? ` ${c.serial_no}` : ''}`, amount: Number(c.amount) || 0,
+      note: [c.claim_date ? `claim of ${c.claim_date}` : null, c.note].filter(Boolean).join(' · ') || null });
+  }
+  // ---- zakat through payroll ----
+  if (ctx.zakat > 0) add('ZAKAT', { key: 'ZAKAT', amount: ctx.zakat, note: 'Monthly zakat (tax details); reduces PCB' });
+  // ---- company loans ----
+  for (const ln of ctx.loans || []) {
+    const out = Math.max(0, r2(Number(ln.principal) - Number(ln.repaid || 0)));
+    if (!(out > 0)) continue;
+    const all = !!ctx.settlement?.recover_loans;
+    const amt = all ? out : Math.min(Number(ln.monthly_instalment), out);
+    add('LOAN', { key: `LOAN:${ln.id}`, label: `Company loan${ln.description ? ` – ${ln.description}` : ''}`, amount: amt,
+      note: `${all ? 'Final settlement: full balance' : 'Instalment'} · balance after this month RM${fmt(r2(out - amt))}` });
+  }
+  // ---- final settlement ----
+  const st = ctx.settlement;
+  if (st) {
+    const alMode = st.al_mode || 'auto';
+    let days = null, amount = null;
+    if (alMode === 'auto' && st.al_balance !== null && st.al_balance !== undefined) { days = r2(st.al_balance); amount = r2(days * R.orp); }
+    if (alMode === 'custom') { days = st.al_days !== null && st.al_days !== undefined && st.al_days !== '' ? Number(st.al_days) : null; amount = st.al_amount !== null && st.al_amount !== undefined && st.al_amount !== '' ? Number(st.al_amount) : (days !== null ? r2(days * R.orp) : null); }
+    if (amount && amount > 0) add('AL_ENCASH', { key: 'SETTLE:AL', amount, qty: days, unit: 'days', rate: R.orp, note: `${days ?? '—'} unused day(s) × RM${fmt(R.orp)} (final settlement)` });
+    if (amount && amount < 0) add('UNPAID_LEAVE', { key: 'SETTLE:AL', label: 'Annual leave taken in advance', amount: -amount, qty: days === null ? null : -days, unit: 'days', rate: R.orp,
+      note: `${days === null ? '' : `${-days} day(s) `}more than earned × RM${fmt(R.orp)} (final settlement)` });
+    if (alMode === 'auto' && (st.al_balance === null || st.al_balance === undefined)) warnings.push({ level: 'warn', text: 'Final settlement: annual leave balance not available; check the leave records.' });
+    const nd = st.notice_days !== null && st.notice_days !== undefined && st.notice_days !== '' ? Number(st.notice_days) : null;
+    const na = st.notice_amount !== null && st.notice_amount !== undefined && st.notice_amount !== '' ? Number(st.notice_amount) : (nd !== null ? r2(nd * R.orp) : null);
+    if (st.notice_mode === 'employer_pays' && na > 0) add('NOTICE_PAY', { key: 'SETTLE:NOTICE', amount: na, qty: nd, unit: 'days', rate: R.orp, note: `${nd ?? '—'} day(s) of notice paid in lieu` });
+    if (st.notice_mode === 'employee_pays' && na > 0) add('NOTICE_SHORT', { key: 'SETTLE:NOTICE', amount: na, qty: nd, unit: 'days', rate: R.orp, note: `${nd ?? '—'} day(s) of notice not served` });
+  }
+
   const inputs = {
     basis: R.basis, salary: R.full, orp: r2(R.orp), hrp: r2(R.hrp), normal_hours: R.normal,
     window: win ? { from: win.from, to: win.to, days: win.days, cal_days: win.calDays } : null,
@@ -174,13 +209,14 @@ export function buildAutoItems(ctx) {
 export function computeLine(line, stat) {
   const items = line.items || [];
   const isPersonal = (i) => i.kind === 'deduction' && i.category === 'personal';
-  let earnings = 0, statDed = 0, personal = 0;
+  let earnings = 0, statDed = 0, personal = 0, reimb = 0;
   for (const i of items) {
     const a = itemAmount(i);
-    if (i.kind === 'earning') earnings += a; else if (isPersonal(i)) personal += a; else statDed += a;
+    if (i.category === 'reimbursement') reimb += a;
+    else if (i.kind === 'earning') earnings += a; else if (isPersonal(i)) personal += a; else statDed += a;
   }
   const gross = r2(earnings - statDed);
-  const bases = statutoryBases(items.filter((i) => !isPersonal(i)).map((i) => ({ amount: itemAmount(i), type: { kind: i.kind, subject_epf: i.epf, subject_socso: i.socso, subject_eis: i.eis } })));
+  const bases = statutoryBases(items.filter((i) => !isPersonal(i) && i.category !== 'reimbursement').map((i) => ({ amount: itemAmount(i), type: { kind: i.kind, subject_epf: i.epf, subject_socso: i.socso, subject_eis: i.eis } })));
   const out = { gross, epf_wage: bases.epf, socso_wage: bases.socso, eis_wage: bases.eis, warnings: [] };
   const fl = stat.flags || {};
   if (stat.tables && line.mode !== 'fixed') {
@@ -195,10 +231,22 @@ export function computeLine(line, stat) {
   const ov = line.overrides || {};
   for (const k of STAT_KEYS) if (ov[k] !== null && ov[k] !== undefined && ov[k] !== '') out[k] = Number(ov[k]);
   for (const k of STAT_KEYS) out[k] = r2(out[k]);
-  out.pcb = r2(Number(line.pcb) || 0);
+  // PCB: typed for this month › automatic (LHDN method) › typed on the line
+  const pc = line.inputs?.pcb;
+  if (ov.pcb !== null && ov.pcb !== undefined && ov.pcb !== '') out.pcb = r2(Number(ov.pcb) || 0);
+  else if (pc?.auto && line.mode !== 'fixed') {
+    const t = taxablePay(items, pcbPolicy(stat.pcbPolicy), itemAmount);
+    const zakat = items.filter((i) => i.code === 'ZAKAT').reduce((x, i) => x + itemAmount(i), 0);
+    const res = computePCB({ month: Number(String(stat.period).slice(5, 7)), profile: pc.profile, ytd: pc.ytd, Y1: t.Y1, Yt: t.Yt,
+      epfEe: out.epf_ee, epf1: t.epf1, epft: t.epft, socsoEis: out.socso_ee + out.eis_ee, zakat, policy: stat.pcbPolicy });
+    out.pcb = res.pcb;
+    out.inputs = { ...(line.inputs || {}), pcb: { ...pc, lp_socso: res.lpSocso, tp1: Number(pc.profile?.tp1_monthly) || 0,
+      result: { normal: res.normal, additional: res.additional, gross_pcb: res.gross_pcb, P: res.P, detail: res.detail } } };
+  } else out.pcb = r2(Number(line.pcb) || 0);
   out.net = r2(gross - out.epf_ee - out.socso_ee - out.eis_ee - out.pcb);
   out.personal_deductions = r2(personal);
-  out.net_paid = r2(out.net - personal);
+  out.reimbursements = r2(reimb);
+  out.net_paid = r2(out.net - personal + reimb);
   out.employer_cost = r2(gross + out.epf_er + out.socso_er + out.eis_er);
   if (out.net_paid < 0) out.warnings.push({ level: 'warn', text: 'Net pay is negative.' });
   return out;
@@ -206,9 +254,10 @@ export function computeLine(line, stat) {
 
 /** Group items for display: earnings, statutory deductions (e.g. unpaid leave), personal deductions. */
 export function groupItems(items) {
-  const g = { earnings: [], deductions: [], personal: [] };
+  const g = { earnings: [], deductions: [], personal: [], claims: [] };
   for (const i of items || []) {
-    if (i.kind === 'earning') g.earnings.push(i);
+    if (i.category === 'reimbursement') g.claims.push(i);
+    else if (i.kind === 'earning') g.earnings.push(i);
     else if (i.category === 'personal') g.personal.push(i);
     else g.deductions.push(i);
   }
@@ -231,7 +280,11 @@ export function buildRun(D) {
   const prevPcb = new Map((D.prevLines || []).filter((l) => !l.excluded && Number(l.pcb) > 0).map((l) => [`${l.employee_id}|${l.company_id || 0}`, Number(l.pcb)]));
   const lines = []; const skipped = []; const notices = []; const seen = new Set(); const paidPeople = new Set(); const noLastDay = new Set();
   const isJan = period.slice(5, 7) === '01';
-  const statFor = (age, p, flags) => ({ age, statClass: p.statClass || 'MY', period, flags, tables: D.tables, rules });
+  const statFor = (age, p, flags) => ({ age, statClass: p.statClass || 'MY', period, flags, tables: D.tables, rules, pcbPolicy: D.policies?.pcb });
+  // Phase 6 optional modules
+  const mods = D.policies?.modules || {};
+  const claimsOn = !!mods.claims?.enabled; const loansOn = !!mods.loans; const settleOn = !!mods.settlement; const pcbAuto = !!mods.pcb_auto;
+  const year = Number(period.slice(0, 4));
 
   for (const p of D.people) {
     // every employment period × company active in this month, oldest first
@@ -280,8 +333,17 @@ export function buildRun(D) {
         line = { ...old };
       } else {
         const myTime = time.filter((e) => (e.category === 'PT_HOURS' ? g === ptLine : isPrimary));
+        const profile = D.taxProfiles?.get(p.id) || null;
+        const myClaims = claimsOn && isPrimary ? (D.claims || []).filter((c) => c.employee_id === p.id && c.status !== 'cancelled' && periodOf(c.pay_period) === period
+          && ((c.form_code === 'scf' && mods.claims.scf !== false) || (c.form_code === 'mtcf' && mods.claims.mtcf !== false))) : [];
+        const myLoans = loansOn ? (D.loans || []).filter((ln) => ln.employee_id === p.id && ln.status === 'active' && periodOf(ln.start_period) <= period
+          && ((ln.company_id && ln.company_id === g.a.company_id) || (!ln.company_id && isPrimary) || (ln.company_id && isPrimary && !list.some((x) => x.a.company_id === ln.company_id)))) : [];
+        const leaving = settleOn && isPrimary && g.em.resigned_date && periodOf(g.em.resigned_date) === period;
+        const settlement = leaving ? { al_mode: D.policies?.settlement?.al_mode_default || 'auto', notice_mode: 'none', recover_loans: true,
+          ...(D.settlements?.get(g.em.id) || {}), al_balance: D.leaverAL?.get(p.id) ?? null } : null;
         const built = buildAutoItems({ period, employment: g.em, assignment: g.a, salary: g.salary, window: g.window, allowances: g.a.allowances || [],
           time: myTime, unpaidDays: isPrimary ? unpaidDays : 0, buybacks: isPrimary ? buybacks : [],
+          claims: myClaims, loans: myLoans, settlement, zakat: pcbAuto && isPrimary && profile && !profile.pcb_manual ? Number(profile.zakat_monthly) || 0 : 0,
           types: D.types, typesById: D.typesById, policy: pol, primary: isPrimary || g === ptLine });
         // keep HR's overrides on auto items, and every manual item
         const oldAuto = new Map((old?.items || []).filter((i) => i.auto && i.key).map((i) => [i.key, i]));
@@ -290,17 +352,24 @@ export function buildRun(D) {
         const warnings = [...built.warnings];
         if (g.wins.length > 1) warnings.push({ level: 'info', text: `Two employment periods with this company in the month; the days are added together at the current salary. Check the basic pay.` });
         if (!p.dob) warnings.push({ level: 'info', text: 'No date of birth on record: statutory rates for under-60s used.' });
+        const autoPcb = pcbAuto && !(profile && profile.pcb_manual);
         let pcb = old ? Number(old.pcb) || 0 : 0;
-        if (!old && pol.pcb_carry_forward && prevPcb.has(key)) {
+        if (!autoPcb && !old && pol.pcb_carry_forward && prevPcb.has(key)) {
           pcb = prevPcb.get(key);
           warnings.push({ level: 'info', text: `PCB RM${fmt(pcb)} copied from last month. Check it against the LHDN calculator.` });
         }
         line = {
           employee_id: p.id, assignment_id: g.a.id, company_id: g.a.company_id, emp_name: p.full_name, emp_code: p.emp_id || null,
           mode: 'auto', excluded: old?.excluded || false, items, overrides: old?.overrides || {}, note: old?.note || null, pcb,
-          inputs: { ...built.inputs, age, stat_class: p.statClass || 'MY', flags, primary: isPrimary },
+          inputs: { ...built.inputs, age, stat_class: p.statClass || 'MY', flags, primary: isPrimary,
+            ...(autoPcb ? { pcb: { auto: true, profile: profileSnapshot(profile),
+              ytd: pcbYtd((D.yearLines || []).filter((l) => l.employee_id === p.id && (l.company_id || 0) === (g.a.company_id || 0) && l.period < period && l.period >= `${year}-01-01`),
+                profile, year, itemAmount, D.policies?.pcb) } } : {}),
+            ...(settlement ? { settlement: { al_balance: settlement.al_balance, al_mode: settlement.al_mode, notice_mode: settlement.notice_mode } } : {}) },
           warnings,
         };
+        if (autoPcb && !profile) warnings.push({ level: 'info', text: 'Automatic PCB with default tax details (single, no children). Add their tax details in the Pay tab.' });
+        if (pcbAuto && profile?.pcb_manual) warnings.push({ level: 'info', text: 'PCB typed by hand for this person (tax details: manual PCB).' });
       }
       const tot = computeLine(line, statFor(age, p, flags));
       Object.assign(line, tot, { warnings: [...(line.mode === 'fixed' ? (old.warnings || []).filter((w) => !w.calc) : line.warnings), ...tot.warnings.map((w) => ({ ...w, calc: true }))] });
@@ -329,6 +398,13 @@ export function buildRun(D) {
   return { lines, skipped, notices };
 }
 
+/** Tax details kept on the line (so the calculation can be repeated exactly). */
+export function profileSnapshot(p) {
+  if (!p) return { category: 1, children: 0, resident: true };
+  const k = ['resident', 'category', 'children', 'child_relief_extra', 'disabled', 'spouse_disabled', 'tp1_monthly', 'zakat_monthly', 'prev_year', 'prev_gross', 'prev_epf', 'prev_pcb', 'prev_zakat'];
+  return Object.fromEntries(k.map((x) => [x, p[x]]));
+}
+
 /** Several windows in one month for the same company -> one window with the days added together. */
 export function mergeWindows(wins) {
   if (wins.length === 1) return wins[0];
@@ -341,12 +417,12 @@ export function mergeWindows(wins) {
 /** Recalculate one line's totals after HR edits it. */
 export function recomputeLine(line, D) {
   const inp = line.inputs || {};
-  const tot = computeLine(line, { age: inp.age, statClass: inp.stat_class, period: D.period, flags: inp.flags || {}, tables: D.tables, rules: D.policies?.statutory_rules || {} });
+  const tot = computeLine(line, { age: inp.age, statClass: inp.stat_class, period: D.period, flags: inp.flags || {}, tables: D.tables, rules: D.policies?.statutory_rules || {}, pcbPolicy: D.policies?.pcb });
   const keep = (line.warnings || []).filter((w) => !w.calc);
   return { ...line, ...tot, warnings: [...keep, ...tot.warnings.map((w) => ({ ...w, calc: true }))] };
 }
 
-const SUM_KEYS = ['gross', 'epf_ee', 'epf_er', 'socso_ee', 'socso_er', 'eis_ee', 'eis_er', 'pcb', 'net', 'personal_deductions', 'net_paid', 'employer_cost'];
+const SUM_KEYS = ['gross', 'epf_ee', 'epf_er', 'socso_ee', 'socso_er', 'eis_ee', 'eis_er', 'pcb', 'net', 'personal_deductions', 'reimbursements', 'net_paid', 'employer_cost'];
 /** Run totals: whole run and per company (excluded lines left out). */
 export function runTotals(lines) {
   const blank = () => Object.fromEntries([['lines', 0], ...SUM_KEYS.map((k) => [k, 0])]);
@@ -362,10 +438,11 @@ export function runTotals(lines) {
 
 /** Item summary used by tables: basic, overtime, allowances & others, unpaid leave. */
 export function lineSummary(line) {
-  const s = { basic: 0, overtime: 0, other: 0, unpaid: 0 };
+  const s = { basic: 0, overtime: 0, other: 0, unpaid: 0, claims: 0 };
   for (const i of line.items || []) {
     const a = itemAmount(i);
     if (i.code === 'BASIC') s.basic += a;
+    else if (i.category === 'reimbursement') s.claims += a;
     else if (i.category === 'overtime') s.overtime += a;
     else if (i.kind === 'earning') s.other += a;
     else if (i.category !== 'personal') s.unpaid += a;

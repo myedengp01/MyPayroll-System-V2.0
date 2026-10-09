@@ -2,6 +2,7 @@
 import { fetchAll, loadRef, loadStatTables } from './data.js';
 import { periodOf, prevPeriod } from './engines/payroll.js';
 import { lastDayOfMonth } from './engines/employee.js';
+import { loadLeaveYear, balancesFor, loadPeople } from './leave-data.js';
 
 /** People with employments → assignments → salary history and allowances, plus DOB and statutory class. */
 export async function loadPayPeople(sb, ref) {
@@ -56,9 +57,67 @@ export async function loadPayMonth(sb, period) {
   const [people, types, tables, inputs, run, prev] = await Promise.all([
     loadPayPeople(sb, ref), loadPayTypes(sb), loadStatTables(sb), loadPayInputs(sb, p, p), loadRun(sb, p), loadRun(sb, prevPeriod(p)),
   ]);
-  return {
+  const D = {
     ref, period: p, people, typeList: types.list, types: types.byCode, typesById: types.byId, tables, policies: ref.policies,
     ...inputs, run, existing: run?.lines || [], prevLines: prev?.lines || [],
     companies: new Map(ref.companies.map((c) => [c.id, c])), confMeta: ref.confMeta,
   };
+  Object.assign(D, await loadPhase6(sb, D));
+  return D;
+}
+
+/** Phase 6 inputs, loaded only for the modules that are switched on. A missing table (008 not run yet) just switches the module off. */
+export async function loadPhase6(sb, D) {
+  const mods = D.policies?.modules || {};
+  const out = { taxProfiles: new Map(), claims: [], loans: [], settlements: new Map(), leaverAL: new Map(), yearLines: [], phase6Errors: [] };
+  const p = D.period; const year = p.slice(0, 4);
+  const safe = async (label, fn) => { try { return await fn(); } catch (e) { out.phase6Errors.push(`${label}: ${e.message || e}`); return null; } };
+  if (mods.pcb_auto || mods.loans) {
+    const lines = await safe('Earlier months', () => fetchAll(() => sb.from('eppd_pay_lines').select('employee_id,company_id,items,epf_ee,socso_ee,eis_ee,pcb,excluded,inputs,eppd_pay_runs!inner(period,status)')
+      .eq('eppd_pay_runs.status', 'finalised').lt('eppd_pay_runs.period', p).order('id')));
+    out.yearLines = (lines || []).map(({ eppd_pay_runs: r, ...l }) => ({ ...l, period: r.period }));
+  }
+  if (mods.pcb_auto) {
+    const rows = await safe('Tax details', () => fetchAll(() => sb.from('eppd_tax_profiles').select('*')));
+    for (const r of rows || []) out.taxProfiles.set(r.employee_id, r);
+    out.yearLines.forEach((l) => l);   // (finalised lines are also used for the year-to-date PCB figures)
+  }
+  if (mods.claims?.enabled) out.claims = (await safe('Claims', () => fetchAll(() => sb.from('eppd_claims').select('*').eq('pay_period', p)))) || [];
+  if (mods.loans) {
+    const loans = (await safe('Loans', () => fetchAll(() => sb.from('eppd_loans').select('*').eq('status', 'active')))) || [];
+    const repaid = loanRepayments(out.yearLines);
+    out.loans = loans.map((ln) => ({ ...ln, repaid: repaid.get(ln.id) || 0 }));
+  }
+  if (mods.settlement) {
+    const rows = (await safe('Final settlements', () => fetchAll(() => sb.from('eppd_settlements').select('*')))) || [];
+    for (const r of rows) out.settlements.set(r.employment_id, r);
+    // unused annual leave at the last working day, for everyone leaving this month
+    const leavers = D.people.filter((x) => (x.employments || []).some((e) => e.resigned_date && periodOf(e.resigned_date) === p));
+    if (leavers.length) {
+      await safe('Leave balances', async () => {
+        const L = await loadLeaveYear(sb, Number(year));
+        const lp = new Map((await loadPeople(sb, L.ref)).map((x) => [x.id, x]));
+        for (const x of leavers) {
+          const em = x.employments.find((e) => e.resigned_date && periodOf(e.resigned_date) === p);
+          const person = lp.get(x.id); if (!person) continue;
+          const b = balancesFor({ ...person, employment: { ...(person.employment || {}), ...em } }, L, em.resigned_date);
+          out.leaverAL.set(x.id, b?.AL ? Math.round(b.AL.balance * 100) / 100 : null);
+        }
+      });
+    }
+  }
+  return out;
+}
+
+/** Loan repayments already made in finalised months: loan id → amount. */
+export function loanRepayments(lines) {
+  const m = new Map();
+  for (const l of lines || []) {
+    if (l.excluded) continue;
+    for (const i of l.items || []) {
+      const k = /^LOAN:(\d+)$/.exec(i.key || ''); if (!k) continue;
+      m.set(Number(k[1]), (m.get(Number(k[1])) || 0) + (Number(i.override ?? i.amount) || 0));
+    }
+  }
+  return m;
 }

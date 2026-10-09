@@ -3,7 +3,7 @@
 Payroll app for MyEden Group, rebuilt from the MEG-EPPD 2026 workbook.
 Static site (GitHub Pages) + Supabase. No build step.
 
-**Current version:** v2026.10.09-19:45 · **Phase 5 – Payslips & reports**
+**Current version:** v2026.10.09-20:00 · **Phase 6 – Automatic PCB, claims, loans, final settlement**
 
 ## First-time setup
 
@@ -19,6 +19,7 @@ Run these **in order**. Each file is safe to re-run.
 | `sql/005_leave_time.sql` | Phase 3: leave records, balance adjustments, KPI grades, year-end close, overtime & part-time hours, OTCF links; working-week, leave, carry-forward and part-time policies. |
 | `sql/006_payroll.sql` | Phase 4: pay runs and pay lines, finalise / reopen, payroll history import, payroll policy. |
 | `sql/007_last_working_days.sql` | One-off fix: last working day for 7 former staff whose workbook "Resigned Date" was blank. |
+| `sql/008_phase6.sql` | Phase 6: tax details (automatic PCB), MEG-FORMS claims, loans, final settlement; new payment types (ZAKAT, CLAIM_SCF, CLAIM_MTCF, NOTICE_PAY, NOTICE_SHORT, AL_ENCASH); `modules`, `pcb` and `settlement` policies. All modules start **off**. |
 
 `sql/reset_employees.sql` is **not** part of setup. It deletes every employee record so the one-time
 workbook import can be run again before going live.
@@ -84,7 +85,30 @@ Payroll › Payslips & reports, for any **finalised** month:
   not subject to PCB · D1 PCB · E1 EPF and E2 PERKESO (SOCSO + EIS) employee shares. Fill in each company's
   LHDN E number and each employee's tax number first; ask your tax agent to confirm the allowance treatment.
 
-### 10. After first sign-in
+### 10. Optional modules (Phase 6)
+Switch each on or off in **Settings › HR policies › Optional modules**. Switching one off hides its screen and stops
+it adding items to new payroll lines; finalised months are never changed.
+
+- **Automatic PCB** — PCB is worked out each month by the LHDN computerised method (normal + additional
+  remuneration, year-to-date from finalised months, EPF relief capped at RM4,000, SOCSO/EIS relief up to RM350,
+  rounded up to 5 sen, under RM10 not deducted, zakat taken off). Fill in **Employee › Pay › Tax details**:
+  category (1 single · 2 married, spouse not working · 3 married, spouse working), children, disability, TP1
+  monthly deductions, zakat, and TP3 previous employment this year. Tick *PCB typed by hand* for anyone whose PCB
+  you want to keep typing. On any payroll line you can still type a PCB over the automatic one, and "How PCB was
+  worked out" shows the steps. Bonus, incentive, commission, notice pay and leave pay-outs count as additional
+  remuneration. Reliefs, caps and the band table are in **Settings › HR policies › PCB rules** — check them
+  against the LHDN e-PCB calculator every January.
+- **Claims (MEG-FORMS SCF / MTCF)** — Payroll › MEG-FORMS claims › pull approved claims (MEG-FORMS admin sign-in), match
+  names, choose the pay month. Claims are reimbursements: no EPF/SOCSO/EIS/PCB, not on the EA form, paid on top of
+  net pay and shown separately on the payslip. Still mark them paid in MEG-FORMS.
+- **Loans** — Payroll › Company loans: amount, monthly instalment, first month. The instalment is deducted each month until
+  repaid (the last one is the balance); repayments come from finalised months.
+- **Final settlement** — Payroll › Final settlement lists people leaving soon or recently left. For each: unused
+  annual leave paid out (auto = balance on the last day × daily rate), not paid, or your own days / amount
+  (negative days deduct leave taken in advance); notice pay in lieu or notice not served; and whether to take the
+  remaining loan balance. Items appear in the leaver's last payroll month and can be edited there.
+
+### 11. After first sign-in
 Work through the checklist on the Overview page: upload the four logos, fill in employer numbers,
 paste the year's public holidays, review payment-type switches, approve users.
 
@@ -131,6 +155,11 @@ Its fixture contains real salaries, so it is **git-ignored** and skipped automat
 2. Note the change below.
 
 ## Change log
+- **v2026.10.09-20:00** — Phase 6: optional modules (each switchable). Automatic PCB (LHDN computerised method) with
+  per-employee tax details, typed override per line and per person, editable PCB rules; MEG-FORMS SCF / MTCF claims
+  paid as reimbursements; company loans with instalments; final settlement for leavers (annual leave pay-out or
+  deduction, notice pay, loan recovery). Payslip shows claims; EA form adds B6 (compensation for loss of employment).
+  Run `sql/008_phase6.sql`.
 - **v2026.10.09-19:45** — Phase 5: payslips & reports. Payslips (print / save as PDF, one or all), monthly summary
   with Excel, salary payment list, EPF / SOCSO & EIS / PCB lists per company (print + Excel), year-to-date report,
   EA forms (C.P.8A) with signatory, checks for missing EPF / tax / E numbers and bank accounts. No database change.

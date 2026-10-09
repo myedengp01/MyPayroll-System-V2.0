@@ -194,5 +194,55 @@ export async function render(el, ctx) {
       if (!(pay.daily_rate_divisor > 0) || !(pay.default_normal_hours > 0)) { toast('Divisor and normal hours must be above 0.', 'error'); return; }
       save('payroll', pay, 'Payroll rules');
     })));
+
+  // ---------------- Phase 6: optional modules, PCB rules, final settlement
+  const mods = { pcb_auto: false, claims: { enabled: false, scf: true, mtcf: true }, loans: false, settlement: false, ...structuredClone(P.modules?.value || {}) };
+  mods.claims = { enabled: false, scf: true, mtcf: true, ...(mods.claims || {}) };
+  const sw = (label, get, set, hint) => {
+    const f = field(label, { type: 'switch', value: get() }); f.input.disabled = !isAdmin;
+    f.input.addEventListener('change', () => set(f.getValue()));
+    return h('div', { style: 'margin-bottom:.7rem' }, f, hint ? h('div', { class: 'small muted', style: 'margin-left:3.2rem' }, hint) : null);
+  };
+  el.append(h('div', { id: 'modules' }), panel('Optional modules', 'Switch each part on when you are ready to use it. Switching a module off hides its pages and stops it changing new payroll months; finalised months are never affected.',
+    sw('Automatic PCB (LHDN computerised method)', () => mods.pcb_auto, (v) => { mods.pcb_auto = v; }, 'PCB is worked out for every line from each person’s tax details. You can still type PCB for a month, or mark a person as “manual PCB”.'),
+    sw('MEG-FORMS claims paid with the salary', () => mods.claims.enabled, (v) => { mods.claims.enabled = v; }, 'Approved claims pulled from MEG-FORMS are added on top of net pay (not taxed, no EPF/SOCSO/EIS).'),
+    h('div', { style: 'margin:0 0 .7rem 3.2rem;display:flex;gap:1.5rem' },
+      sw('SCF – staff misc claims', () => mods.claims.scf !== false, (v) => { mods.claims.scf = v; }),
+      sw('MTCF – mileage claims', () => mods.claims.mtcf !== false, (v) => { mods.claims.mtcf = v; })),
+    sw('Company loans', () => mods.loans, (v) => { mods.loans = v; }, 'Monthly instalments are deducted from net pay until the loan is repaid.'),
+    sw('Final settlement for leavers', () => mods.settlement, (v) => { mods.settlement = v; }, 'In the month someone leaves: unused annual leave, notice pay in lieu and loan balances are added to their last pay. Editable per person.'),
+    saveBtn('Save modules', async () => { if (await save('modules', mods, 'Optional modules')) await ctx.reloadModules?.(); })));
+
+  const pcbDef = { reliefs: { individual: 9000, spouse: 4000, disabled: 7000, spouse_disabled: 6000, child: 2000 }, epf_cap: 4000, socso_relief: true, socso_relief_cap: 350, non_resident_rate: 30, min_pcb: 10, bands: [] };
+  const pcb = { ...pcbDef, ...structuredClone(P.pcb?.value || {}) }; pcb.reliefs = { ...pcbDef.reliefs, ...(pcb.reliefs || {}) };
+  const reliefRow = (label, k) => h('tr', {}, h('td', {}, label), h('td', {}, n(pcb.reliefs[k], (v) => { pcb.reliefs[k] = v; }, '7rem')));
+  const numRow = (label, k, unit) => h('tr', {}, h('td', {}, label), h('td', {}, n(pcb[k], (v) => { pcb[k] = v; }, '7rem'), unit ? h('span', { class: 'small muted', style: 'margin-left:.4rem' }, unit) : null));
+  const socsoSw = field('Include SOCSO + EIS relief', { type: 'switch', value: pcb.socso_relief }); socsoSw.input.disabled = !isAdmin;
+  socsoSw.input.addEventListener('change', () => { pcb.socso_relief = socsoSw.getValue(); });
+  const bandsBody = h('tbody', {}, (pcb.bands || []).map((b) => h('tr', {},
+    h('td', {}, n(b.from, (v) => { b.from = v; }, '8rem')), h('td', {}, n(b.rate, (v) => { b.rate = v; }, '4.5rem')),
+    h('td', {}, n(b.b13, (v) => { b.b13 = v; }, '7rem')), h('td', {}, n(b.b2, (v) => { b.b2 = v; }, '7rem')))));
+  el.append(panel('PCB rules (automatic PCB)', 'From the LHDN specification for the computerised calculation. Check them against the LHDN e-PCB calculator each January and after each Budget; change them here when LHDN does.',
+    h('div', { class: 'grid-2', style: 'gap:1.2rem 2rem;align-items:start' },
+      h('table', { class: 'data' }, h('thead', {}, h('tr', {}, h('th', {}, 'Relief (a year)'), h('th', {}, 'RM'))), h('tbody', {},
+        reliefRow('Individual', 'individual'), reliefRow('Spouse (category 2: spouse not working)', 'spouse'), reliefRow('Disabled employee (extra)', 'disabled'),
+        reliefRow('Disabled spouse', 'spouse_disabled'), reliefRow('Each child (basic)', 'child'))),
+      h('table', { class: 'data' }, h('thead', {}, h('tr', {}, h('th', {}, 'Other rules'), h('th', {}, ''))), h('tbody', {},
+        numRow('EPF relief cap a year', 'epf_cap', 'RM'), numRow('SOCSO + EIS relief cap a year', 'socso_relief_cap', 'RM'),
+        numRow('Non-resident flat rate', 'non_resident_rate', '%'), numRow('PCB below this is not deducted', 'min_pcb', 'RM'),
+        h('tr', {}, h('td', { colspan: 2 }, socsoSw))))),
+    h('h3', { style: 'margin:1.2rem 0 .4rem' }, 'Tax table (chargeable income for the year)'),
+    h('table', { class: 'data', style: 'max-width:620px' }, h('thead', {}, h('tr', {}, h('th', {}, 'From (M), RM'), h('th', {}, 'Rate (R) %'), h('th', {}, 'B: categories 1 & 3'), h('th', {}, 'B: category 2'))), bandsBody),
+    h('p', { class: 'small muted', style: 'margin-top:.5rem' }, 'B is the tax on M, less the RM400 rebate (RM800 for category 2) where chargeable income is RM35,000 or less. Categories: 1 single · 2 married, spouse not working · 3 married, spouse working.'),
+    saveBtn('Save PCB rules', () => save('pcb', pcb, 'PCB rules'))));
+
+  const st = { al_mode_default: 'auto', ...structuredClone(P.settlement?.value || {}) };
+  const alSel = h('select', { disabled: !isAdmin, 'aria-label': 'Unused leave default', style: 'width:auto' },
+    [['auto', 'Pay out unused leave (deduct leave taken in advance)'], ['none', 'Do nothing; HR decides each time']].map(([v, l]) => h('option', { value: v, selected: st.al_mode_default === v }, l)));
+  alSel.addEventListener('change', () => { st.al_mode_default = alSel.value; });
+  el.append(panel('Final settlement', 'Default for a leaver’s annual leave. Each person can still be changed on the Final settlement page.',
+    h('label', { class: 'check-row' }, 'Unused annual leave', alSel),
+    h('p', { class: 'small muted', style: 'margin-top:.5rem' }, 'Leave and notice days are paid at the daily rate (basic ÷ 26).'),
+    saveBtn('Save final settlement default', () => save('settlement', st, 'Final settlement default'))));
 }
 

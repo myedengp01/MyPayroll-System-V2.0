@@ -127,7 +127,9 @@ export async function render(el, ctx, params, query) {
           h('tbody', {}, ...m.statutory.map((s) => h('tr', {}, h('td', {}, s.label), h('td', { class: 'num' }, money(s.ee)))),
             h('tr', {}, h('td', {}, 'PCB (monthly tax deduction)'), h('td', { class: 'num' }, money(m.pcb))), ...amtRows(m.personal)),
           h('tfoot', {}, h('tr', {}, h('th', {}, 'Total deductions'), h('th', { class: 'num' }, money(m.totalDeductions)))))),
-      h('div', { class: 'doc-net' }, h('span', {}, 'NET PAY'), h('b', {}, `RM ${money(m.netPaid)}`)),
+      m.claims.length ? h('table', { class: 'doc-table' }, h('thead', {}, h('tr', {}, h('th', {}, 'Claims reimbursed (not taxed)'), h('th', { class: 'num' }, 'RM'))),
+        h('tbody', {}, ...amtRows(m.claims)), h('tfoot', {}, h('tr', {}, h('th', {}, 'Total claims'), h('th', { class: 'num' }, money(m.claimsTotal))))) : null,
+      h('div', { class: 'doc-net' }, h('span', {}, m.claims.length ? 'NET PAY (incl. claims)' : 'NET PAY'), h('b', {}, `RM ${money(m.netPaid)}`)),
       h('div', { class: 'doc-three' },
         h('table', { class: 'doc-table small' }, h('thead', {}, h('tr', {}, h('th', {}, 'Employer contributions'), h('th', { class: 'num' }, 'RM'))),
           h('tbody', {}, m.statutory.map((s) => h('tr', {}, h('td', {}, s.label), h('td', { class: 'num' }, money(s.er)))))),
@@ -289,8 +291,8 @@ export async function render(el, ctx, params, query) {
       h('button', { class: 'btn', type: 'button', disabled: !ea.length, onclick: async () => {
         try {
           await downloadXlsx(`EA_${year}.xlsx`, [{ name: `EA ${year}`, title: [`Borang EA (C.P.8A) figures · ${year}`, 'B1(a) salary incl. overtime & leave pay · B1(b) commission & bonus · B1(c) allowances & perquisites · F exempt'],
-            header: ['Employee ID', 'Name', 'Company', 'Months', 'B1(a)', 'B1(b)', 'B1(c)', 'Total B', 'F exempt', 'D1 PCB', 'E1 EPF (employee)', 'E2 PERKESO (SOCSO + EIS, employee)'],
-            rows: ea.map((e) => [e.emp_code || '', e.emp_name, coShort(e.company_id), e.months, e.b1a, e.b1b, e.b1c, e.totalB, e.f_exempt, e.d1_pcb, e.e1_epf, e.e2_perkeso]) }]);
+            header: ['Employee ID', 'Name', 'Company', 'Months', 'B1(a)', 'B1(b)', 'B1(c)', 'B6 compensation', 'Total B', 'F exempt', 'D1 PCB', 'E1 EPF (employee)', 'E2 PERKESO (SOCSO + EIS, employee)'],
+            rows: ea.map((e) => [e.emp_code || '', e.emp_name, coShort(e.company_id), e.months, e.b1a, e.b1b, e.b1c, e.b6 || 0, e.totalB, e.f_exempt, e.d1_pcb, e.e1_epf, e.e2_perkeso]) }]);
         } catch (err) { toast(err.message || String(err), 'error'); }
       } }, 'Download Excel'));
     const missing = ea.filter((e) => issues(e).length).length;
@@ -349,7 +351,7 @@ export async function render(el, ctx, params, query) {
         row('3', 'Manfaat berupa barangan / Benefits in kind', 0),
         row('4', 'Nilai tempat kediaman / Value of living accommodation', 0),
         row('5', 'Bayaran balik daripada Kumpulan Wang Simpanan/Pencen yang tidak diluluskan / Refund from unapproved provident/pension fund', 0),
-        row('6', 'Pampasan kerana kehilangan pekerjaan / Compensation for loss of employment', 0)),
+        row('6', 'Pampasan kerana kehilangan pekerjaan / Compensation for loss of employment', e.b6 || 0)),
         h('tfoot', {}, h('tr', {}, h('th', {}), h('th', {}, 'JUMLAH / TOTAL'), h('th', { class: 'num' }, money(e.totalB))))),
       h('h3', { class: 'ea-h' }, 'C. PENCEN DAN LAIN-LAIN / PENSION AND OTHERS'),
       h('table', { class: 'doc-table ea-tbl' }, h('tbody', {}, row('1', 'Pencen / Pension', 0), row('2', 'Anuiti atau bayaran berkala yang lain / Annuities or other periodical payments', 0))),

@@ -1,5 +1,5 @@
 // Employee profile: personal, employment periods, pay (salary history, allowances, statutory switches)
-import { h, clear, fmtDate, money, toast, failed, switchToggle, confirmDialog } from '../ui.js';
+import { h, clear, fmtDate, money, toast, failed, switchToggle, confirmDialog, field, openModal } from '../ui.js';
 import { loadRef } from '../data.js';
 import { employmentStatus, serviceLength, formatService, todayIso, ageOn, socsoFromNric, salaryAsOf } from '../engines/employee.js';
 import { computeNotice } from '../engines/notice.js';
@@ -205,8 +205,57 @@ export async function render(el, ctx, params, query) {
     for (const a of asgOf(em.id)) wrap.append(assignmentBlock(a, em));
     wrap.append(h('div', { class: 'side-actions' },
       h('button', { class: 'btn sm', type: 'button', onclick: () => editAssignment(ctx, ref, em.id, null, reload, { joinDate: em.join_date }) }, 'Add another paying company')));
-    wrap.append(payHistoryBlock());
+    wrap.append(taxBlock(), payHistoryBlock());
     return wrap;
+  }
+
+  // tax details used by automatic PCB (Phase 6)
+  function taxBlock() {
+    const box = h('div', { class: 'block' }, h('div', { class: 'block-head' }, h('h3', {}, 'Tax details (PCB)')), h('p', { class: 'small muted' }, 'Loading…'));
+    (async () => {
+      const { data, error } = await ctx.sb.from('eppd_tax_profiles').select('*').eq('employee_id', id).maybeSingle();
+      if (error) { clear(box).append(h('div', { class: 'block-head' }, h('h3', {}, 'Tax details (PCB)')), h('p', { class: 'small muted' }, 'Not set up yet (run sql/008_phase6.sql).')); return; }
+      const t = data || { pcb_manual: false, resident: true, category: 1, children: 0, child_relief_extra: 0, disabled: false, spouse_disabled: false, tp1_monthly: 0, zakat_monthly: 0, prev_gross: 0, prev_epf: 0, prev_pcb: 0, prev_zakat: 0 };
+      const CAT = { 1: 'Single (or spouse claims own relief)', 2: 'Married, spouse not working', 3: 'Married, spouse working' };
+      const on = !!ctx.modules?.pcb_auto;
+      const kv = [['PCB', t.pcb_manual ? 'Typed by hand each month' : (on ? 'Automatic' : 'Automatic PCB is switched off (Settings › HR policies)')],
+        ['Residency', t.resident === false ? 'Non-resident (flat rate)' : 'Resident'], ['Category', `${t.category} · ${CAT[t.category]}`],
+        ['Children (basic relief)', String(t.children || 0)], ['Extra child relief a year', t.child_relief_extra ? `RM${money(t.child_relief_extra)}` : '—'],
+        ['Disabled', [t.disabled ? 'employee' : null, t.spouse_disabled ? 'spouse' : null].filter(Boolean).join(', ') || '—'],
+        ['TP1 claims a month', t.tp1_monthly ? `RM${money(t.tp1_monthly)}` : '—'], ['Zakat through payroll a month', t.zakat_monthly ? `RM${money(t.zakat_monthly)}` : '—'],
+        ['Previous employment (TP3)', t.prev_year ? `${t.prev_year}: pay RM${money(t.prev_gross)}, EPF RM${money(t.prev_epf)}, PCB RM${money(t.prev_pcb)}` : '—']];
+      clear(box).append(h('div', { class: 'block-head' }, h('h3', {}, 'Tax details (PCB)'), canHR ? h('button', { class: 'btn sm', type: 'button', onclick: () => editTax(t, !data) }, 'Edit') : null),
+        h('dl', { class: 'kv-grid' }, kv.map(([k, v]) => h('div', {}, h('dt', {}, k), h('dd', {}, v)))));
+    })();
+    return box;
+  }
+  function editTax(t, isNew) {
+    const F = {
+      pcb_manual: field('Type PCB by hand for this person (no automatic PCB)', { type: 'switch', value: t.pcb_manual, span2: true }),
+      resident: field('Tax resident in Malaysia', { type: 'switch', value: t.resident !== false, span2: true }),
+      category: field('Category', { type: 'select', value: t.category, options: [[1, '1 · Single (or spouse claims own relief)'], [2, '2 · Married, spouse not working'], [3, '3 · Married, spouse working']] }),
+      children: field('Children claimed (basic child relief)', { type: 'number', value: t.children, min: 0, step: '1' }),
+      child_relief_extra: field('Extra child relief a year (RM)', { type: 'number', value: t.child_relief_extra, step: '0.01', hint: 'Higher education or disabled children: the relief above the basic amount.' }),
+      disabled: field('Employee is disabled', { type: 'switch', value: t.disabled }),
+      spouse_disabled: field('Spouse is disabled', { type: 'switch', value: t.spouse_disabled }),
+      tp1_monthly: field('Other reliefs claimed via TP1, per month (RM)', { type: 'number', value: t.tp1_monthly, step: '0.01' }),
+      zakat_monthly: field('Zakat through payroll, per month (RM)', { type: 'number', value: t.zakat_monthly, step: '0.01', hint: 'Deducted from pay and from PCB.' }),
+      prev_year: field('Previous employment this year (TP3): year', { type: 'number', value: t.prev_year, step: '1', hint: 'Leave blank if none.' }),
+      prev_gross: field('TP3: pay received (RM)', { type: 'number', value: t.prev_gross, step: '0.01' }),
+      prev_epf: field('TP3: EPF (RM)', { type: 'number', value: t.prev_epf, step: '0.01' }),
+      prev_pcb: field('TP3: PCB (RM)', { type: 'number', value: t.prev_pcb, step: '0.01' }),
+      prev_zakat: field('TP3: zakat (RM)', { type: 'number', value: t.prev_zakat, step: '0.01' }),
+      note: field('Note', { type: 'textarea', value: t.note, span2: true }),
+    };
+    openModal({ title: 'Tax details (PCB)', wide: true, body: h('div', { class: 'form-grid' }, Object.values(F)),
+      actions: [{ label: 'Save', primary: true, onClick: async (close) => {
+        const v = Object.fromEntries(Object.entries(F).map(([k, f]) => [k, f.getValue()]));
+        for (const k of ['children', 'child_relief_extra', 'tp1_monthly', 'zakat_monthly', 'prev_gross', 'prev_epf', 'prev_pcb', 'prev_zakat']) v[k] = Number(v[k]) || 0;
+        v.category = Number(v.category) || 1; v.prev_year = v.prev_year ? Number(v.prev_year) : null;
+        const { error } = await ctx.sb.from('eppd_tax_profiles').upsert({ employee_id: id, ...v });
+        if (failed(error)) return false;
+        toast('Tax details saved. Recalculate open payroll months to use them.'); close(); draw(); return true;
+      } }] });
   }
 
   // pay lines from the monthly payroll (finalised and draft months)

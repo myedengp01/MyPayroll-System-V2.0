@@ -65,7 +65,8 @@ export async function render(el, ctx) {
         ['Phase 3', 'Leave & attendance, AL calculator, year-end close, OT and part-time hours (OTCF)', 'Live'],
         ['Phase 4', 'Monthly payroll: pay runs, overtime at Employment Act rates, statutory, finalise & lock, Jan–Sep 2026 history', 'Live'],
         ['Phase 5', 'Payslips (PDF), monthly summary, payment list, EPF / SOCSO & EIS / PCB lists, year to date, EA forms', 'Live'],
-        ['Phase 6', 'PCB, self-service, MEG-FORMS claims, final settlement, loans', 'Next'],
+        ['Phase 6', 'Automatic PCB, MEG-FORMS claims, company loans, final settlement (each can be switched on/off)', 'Live'],
+        ['Later', 'Staff self-service (staff see their own payslips and leave)', ''],
       ].map(([p, t, s]) => h('div', {}, h('b', {}, p), h('span', {}, t),
         s ? h('span', { class: `tag ${s === 'Live' ? 'ok' : 'warn'}` }, s) : h('span', {}))))));
 }

@@ -459,3 +459,10 @@ table.data.dense th, table.data.dense td { padding: .4rem .55rem; font-size: .85
 .sheet.ea .ea-sign { padding-top: 2mm; }
 .sheet.ea .ea-sigline { margin-top: 8mm; }
 .kv-row span { white-space: nowrap; }
+
+/* ---------- Phase 6 ---------- */
+dl.kv-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: .5rem 1.2rem; margin: 0; }
+dl.kv-grid dt { font-size: .78rem; color: var(--muted); }
+dl.kv-grid dd { margin: 0; font-weight: 600; }
+.pcb-calc { background: var(--surface-2); border-radius: var(--radius); padding: .6rem .8rem; font-size: .85rem; margin-top: .5rem; }
+.pcb-calc li { margin: .15rem 0; }
