@@ -3,7 +3,7 @@
 Payroll app for MyEden Group, rebuilt from the MEG-EPPD 2026 workbook.
 Static site (GitHub Pages) + Supabase. No build step.
 
-**Current version:** v2026.10.09-14:45 · **Phase 3 – Leave & time**
+**Current version:** v2026.10.09-16:30 · **Phase 4 – Monthly payroll**
 
 ## First-time setup
 
@@ -17,6 +17,7 @@ Run these **in order**. Each file is safe to re-run.
 | `sql/003_seed_statutory.sql` | EPF / SOCSO / EIS tables from the workbook (8 versions, 1,133 rows). |
 | `sql/004_employees.sql` | Phase 2: employees, employment periods, paying companies, salary history, allowances, Employee ID generator, workbook import. |
 | `sql/005_leave_time.sql` | Phase 3: leave records, balance adjustments, KPI grades, year-end close, overtime & part-time hours, OTCF links; working-week, leave, carry-forward and part-time policies. |
+| `sql/006_payroll.sql` | Phase 4: pay runs and pay lines, finalise / reopen, payroll history import, payroll policy. |
 
 `sql/reset_employees.sql` is **not** part of setup. It deletes every employee record so the one-time
 workbook import can be run again before going live.
@@ -50,7 +51,26 @@ Time & leave › Overtime & hours › Pull approved OTCF claims. Sign in with a 
 account (the OTCF database only lets those roles read every claim). Names are matched to employees; any you
 match by hand are remembered. Pulled lines can be edited or deleted, and pulling again never duplicates.
 
-### 7. After first sign-in
+### 7. Import past payroll months (admin)
+Payroll › Import past months › choose the same .xlsm. January–September 2026 come in from PayrollSMRY2026 as
+**finalised** months, exactly as the workbook calculated them (year-to-date totals for Phase 5). Rows that look
+wrong are held back as "left out" unless you tick them. The preview also runs each month through the new engine
+and lists every line that would come out differently, with the cause. December 2025 is not imported.
+
+### 8. Each month
+Payroll › Monthly payroll › **Start <month>**. The run is built from salary history, allowances, unpaid leave,
+overtime & part-time hours and year-end AL buy-backs (paid in January). Click a line to add one-off items
+(bonus, commission, MVC…), type PCB from the LHDN calculator (last month's PCB is copied in as a starting point),
+adjust an amount or leave the line out. **Save as draft** any time; **Recalculate** picks up new leave / OT
+while keeping your edits. **Finalise** locks the month. Only an admin can reopen a finalised month, with a reason
+that goes into the audit log.
+
+Pay rules (Settings › HR policies › Payroll): daily rate = basic ÷ 26, hourly rate = daily rate ÷ normal hours
+(work hours less meal break). Normal-day OT × the person's OT multiplier (1.5), off day × 1.5, rest day ½ day / 1 day
+/ × 2 per extra hour, public holiday 2 days / × 3 per extra hour. Unpaid leave and part months use calendar days.
+EPF / SOCSO / EIS follow each payment type's switches and each person's paying-company switches.
+
+### 9. After first sign-in
 Work through the checklist on the Overview page: upload the four logos, fill in employer numbers,
 paste the year's public holidays, review payment-type switches, approve users.
 
@@ -61,12 +81,12 @@ Access is separate from MyPRSys even though both use the same Supabase login.
 | Role | Can do |
 |---|---|
 | admin | Everything, including statutory tables, payment types, policies, users |
-| hr | Employees incl. NRIC, bank, salary and allowances; leave, balances, year-end close, overtime; companies, departments, job titles, pick-lists, holidays |
-| approver | Employee names and jobs only (payroll approval arrives in Phase 4) |
+| hr | Employees incl. NRIC, bank, salary and allowances; leave, balances, year-end close, overtime; monthly payroll (prepare and finalise); companies, departments, job titles, pick-lists, holidays |
+| approver | Employee names and jobs only (payroll is finalised by HR / admin) |
 | viewer | Employee names and jobs only |
 
 NRIC, date of birth, address, bank, EPF/SOCSO/tax numbers, salary history and allowances are stored in
-separate tables that only admin and HR can read. All leave, KPI and overtime data is admin/HR only too.
+separate tables that only admin and HR can read. All leave, KPI, overtime and payroll data is admin/HR only too.
 The database enforces this, not just the screens.
 
 ## Project layout
@@ -97,6 +117,15 @@ Its fixture contains real salaries, so it is **git-ignored** and skipped automat
 2. Note the change below.
 
 ## Change log
+- **v2026.10.09-16:30** — Phase 4: monthly payroll. One pay run a month, one line per employee per paying company;
+  basic from salary history (part months by calendar days, hourly staff from part-time hours), unpaid leave,
+  overtime at Employment Act rates (basic ÷ 26 ÷ normal hours), recurring allowances and personal deductions,
+  January AL buy-back from the year-end close, EPF / SOCSO / EIS from the statutory engine with payment-type and
+  company switches and the age-60 rule (age on the last day of the previous month); PCB typed in (last month's
+  copied as a start); one-off items, amount overrides, statutory overrides, leave-out; per-company totals; CSV export;
+  save draft / recalculate / finalise (locked) / admin reopen with reason; January–September 2026 history import
+  from PayrollSMRY2026 with an engine-vs-workbook comparison; payroll history on the employee's Pay tab;
+  payroll rules editor. Also: dialogs fit phone screens.
 - **v2026.10.09-14:45** — Phase 3: leave & time. Leave records (HR/admin; working days counted automatically,
   skipping Saturday off days, Sunday rest days and public holidays; half days; override), leave balances for every type
   (AL by service band with the workbook's month rule; sick 14/18/22, hospitalisation 60 incl. sick, maternity 98,

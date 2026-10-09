@@ -376,3 +376,19 @@ details.legend-box ul { margin: 0 0 1rem; padding: 0 1.2rem 0 2.6rem; display: g
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
 }
+
+/* ---------- Phase 4: payroll ---------- */
+table.data tfoot th { border-top: 2px solid var(--line); border-bottom: 0; background: var(--surface-2); }
+table.data tr.sub-row th { background: var(--surface-2); text-align: left; font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); padding-top: .4rem; padding-bottom: .4rem; }
+table.data tr.inactive td .strong { text-decoration: line-through; }
+details > summary.linkish { display: inline-block; margin: .2rem 0 .8rem; list-style: none; }
+details > summary.linkish::-webkit-details-marker { display: none; }
+.modal.wide table.data td input[type=number] { padding: .3rem .45rem; }
+.modal { max-width: calc(100vw - 1.5rem); }
+.modal-body { min-width: 0; overflow-x: auto; }
+.modal .grid-2 > *, .modal .kv > * { min-width: 0; }
+@media (max-width: 640px) {
+  .modal .kv { grid-template-columns: 1fr 1fr !important; }
+  .modal .grid-2 { grid-template-columns: 1fr; }
+  .modal .filter-row > input, .modal .filter-row > select { flex: 1 1 100%; width: 100% !important; }
+}

@@ -202,7 +202,28 @@ export async function render(el, ctx, params, query) {
     for (const a of asgOf(em.id)) wrap.append(assignmentBlock(a, em));
     wrap.append(h('div', { class: 'side-actions' },
       h('button', { class: 'btn sm', type: 'button', onclick: () => editAssignment(ctx, ref, em.id, null, reload, { joinDate: em.join_date }) }, 'Add another paying company')));
+    wrap.append(payHistoryBlock());
     return wrap;
+  }
+
+  // pay lines from the monthly payroll (finalised and draft months)
+  function payHistoryBlock() {
+    const box = h('div', { class: 'block' }, h('div', { class: 'block-head' }, h('h3', {}, 'Payroll history')), h('p', { class: 'small muted' }, 'Loading…'));
+    (async () => {
+      const { data, error } = await ctx.sb.from('eppd_pay_lines').select('id,run_id,company_id,gross,epf_ee,socso_ee,eis_ee,pcb,net_paid,excluded,eppd_pay_runs(period,status)')
+        .eq('employee_id', id).order('id', { ascending: false }).limit(60);
+      const body = error ? h('p', { class: 'small muted' }, 'Payroll is not set up yet (run sql/006_payroll.sql).')
+        : !data.length ? h('p', { class: 'small muted' }, 'Not in any payroll month yet.')
+        : h('div', { class: 'table-wrap' }, h('table', { class: 'data' },
+          h('thead', {}, h('tr', {}, ['Month', 'Company', 'Gross', 'EPF', 'SOCSO', 'EIS', 'PCB', 'Net paid', ''].map((t, i) => h('th', { class: i >= 2 && i <= 7 ? 'num' : '' }, t)))),
+          h('tbody', {}, data.filter((l) => l.eppd_pay_runs).sort((a, b) => b.eppd_pay_runs.period.localeCompare(a.eppd_pay_runs.period)).map((l) => h('tr', { class: l.excluded ? 'inactive' : '' },
+            h('td', {}, h('a', { href: `#/payroll/${l.eppd_pay_runs.period.slice(0, 7)}` }, new Date(l.eppd_pay_runs.period + 'T00:00:00').toLocaleDateString('en-GB', { month: 'short', year: 'numeric' }))),
+            h('td', { class: 'small' }, ref.company(l.company_id)?.short_name || ''),
+            ...['gross', 'epf_ee', 'socso_ee', 'eis_ee', 'pcb'].map((k) => h('td', { class: 'num' }, money(l[k]))), h('td', { class: 'num strong' }, money(l.net_paid)),
+            h('td', {}, l.excluded ? h('span', { class: 'tag' }, 'Left out') : l.eppd_pay_runs.status === 'draft' ? h('span', { class: 'tag warn' }, 'Draft') : null))))));
+      clear(box).append(h('div', { class: 'block-head' }, h('h3', {}, 'Payroll history')), body);
+    })();
+    return box;
   }
 
   function assignmentBlock(a, em) {

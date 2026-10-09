@@ -19,6 +19,9 @@ const ROUTES = {
   'leave/year-end':         { label: 'Year-end close',         load: () => import('./modules/yearclose.js'), roles: ['admin', 'hr'] },
   'time':                   { label: 'Overtime & hours',       load: () => import('./modules/overtime.js'), roles: ['admin', 'hr'] },
   'leave/import':           { label: 'Import leave',           load: () => import('./modules/leaveimportpage.js'), roles: ['admin'] },
+  'payroll':                { label: 'Monthly payroll',        load: () => import('./modules/payroll.js'), roles: ['admin', 'hr'] },
+  'payroll/:period':        { label: 'Monthly payroll',        load: () => import('./modules/payroll.js'), roles: ['admin', 'hr'], menu: 'payroll' },
+  'payroll/import':         { label: 'Import past months',     load: () => import('./modules/payimportpage.js'), roles: ['admin'] },
   'settings/companies':     { label: 'Companies',              load: () => import('./modules/companies.js') },
   'settings/org':           { label: 'Departments & job titles', load: () => import('./modules/org.js') },
   'settings/lists':         { label: 'Pick-lists',             load: () => import('./modules/lists.js') },
@@ -33,7 +36,7 @@ const MENU = [
   { group: null, items: ['dashboard'] },
   { group: 'People', items: ['employees', 'employees/ids', 'employees/import'] },
   { group: 'Time & leave', items: ['leave', 'leave/balances', 'leave/al-calculator', 'leave/year-end', 'time', 'leave/import'] },
-  { group: 'Payroll', soon: [['Monthly payroll', 'Phase 4'], ['Payslips & reports', 'Phase 5']] },
+  { group: 'Payroll', items: ['payroll', 'payroll/import'], soon: [['Payslips & reports', 'Phase 5']] },
   { group: 'Settings', items: ['settings/companies', 'settings/org', 'settings/lists', 'settings/payment-types',
     'settings/statutory', 'settings/holidays', 'settings/policies', 'settings/users', 'settings/audit'] },
 ];

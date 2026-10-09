@@ -97,7 +97,7 @@ export async function render(el, ctx) {
   [...Object.values(otF), ...Object.values(srF)].forEach((f) => { f.input.disabled = !isAdmin; });
   el.append(h('div', { class: 'grid-2', style: 'margin-top:1.25rem' },
     h('section', { class: 'panel' }, h('div', { class: 'panel-head' }, h('div', {}, h('h2', {}, 'Overtime defaults'),
-      h('p', { class: 'small muted' }, 'Starting values for new employees; each person can differ.'))),
+      h('p', { class: 'small muted' }, 'Starting values for new employees; each person can differ. Payroll uses each person’s OT multiplier; the daily rate divisor for payroll is set under Payroll below.'))),
       h('div', { class: 'panel-body', style: 'display:grid;gap:.8rem' }, Object.values(otF),
         isAdmin ? h('button', { class: 'btn sm primary', type: 'button', style: 'justify-self:start', onclick: () =>
           save('ot_defaults', Object.fromEntries(Object.entries(otF).map(([k, f]) => [k, f.getValue()])), 'Overtime defaults') }, 'Save overtime defaults') : null)),
@@ -174,4 +174,25 @@ export async function render(el, ctx) {
   el.append(panel('Part-time staff', 'Annual and sick leave for part-timers = full-time days × their weekly hours ÷ full-time weekly hours, rounded half up. Set each part-timer’s weekly hours in their Employment tab.',
     h('label', { class: 'check-row' }, 'Full-time weekly hours', n(pt.full_time_weekly_hours, (v) => { pt.full_time_weekly_hours = v; })),
     saveBtn('Save part-time rule', () => save('part_time', pt, 'Part-time rule'))));
+
+  // ---------------- Phase 4: payroll
+  const DEF = { daily_rate_divisor: 26, default_normal_hours: 8, pcb_carry_forward: true, rates: { OT_NORMAL: 1.5, OT_OFFDAY: 1.5, RD_HALF: 0.5, RD_FULL: 1, RD_EXCESS: 2, PH_NORMAL: 2, PH_EXCESS: 3 } };
+  const pay = { ...DEF, ...structuredClone(P.payroll?.value || {}) }; pay.rates = { ...DEF.rates, ...(pay.rates || {}) };
+  const RATE_LABELS = [['OT_NORMAL', 'Normal day OT', '× hourly rate, per hour (default; each person’s own OT multiplier is used when set)'], ['OT_OFFDAY', 'Off day (Saturday) OT', '× hourly rate, per hour'],
+    ['RD_HALF', 'Rest day, up to half a day', '× daily rate, per day'], ['RD_FULL', 'Rest day, more than half a day', '× daily rate, per day'], ['RD_EXCESS', 'Rest day, beyond normal hours', '× hourly rate, per hour'],
+    ['PH_NORMAL', 'Public holiday, normal hours', '× daily rate, per day (on top of the holiday’s own pay)'], ['PH_EXCESS', 'Public holiday, beyond normal hours', '× hourly rate, per hour']];
+  const pcbSw = field('Copy last month’s PCB into a new month (check it before finalising)', { type: 'switch', value: pay.pcb_carry_forward });
+  pcbSw.input.disabled = !isAdmin; pcbSw.input.addEventListener('change', () => { pay.pcb_carry_forward = pcbSw.getValue(); });
+  el.append(panel('Payroll', 'Daily rate = basic ÷ divisor (Employment Act: 26). Hourly rate = daily rate ÷ the person’s normal hours (work hours less meal break). Unpaid leave and part months use calendar days, as the workbook did.',
+    h('div', { class: 'grid-2', style: 'gap:.8rem 2rem' },
+      h('label', { class: 'check-row' }, 'Daily rate divisor', n(pay.daily_rate_divisor, (v) => { pay.daily_rate_divisor = v; })),
+      h('label', { class: 'check-row' }, 'Normal hours when none recorded', n(pay.default_normal_hours, (v) => { pay.default_normal_hours = v; }))),
+    h('table', { class: 'data', style: 'margin-top:1rem;max-width:760px' }, h('thead', {}, h('tr', {}, h('th', {}, 'Overtime type'), h('th', {}, 'Rate'), h('th', {}, ''))),
+      h('tbody', {}, RATE_LABELS.map(([k, l, unit]) => h('tr', {}, h('td', {}, l), h('td', {}, n(pay.rates[k], (v) => { pay.rates[k] = v; })), h('td', { class: 'small muted' }, unit))))),
+    h('div', { style: 'margin-top:1rem' }, pcbSw),
+    saveBtn('Save payroll rules', () => {
+      if (!(pay.daily_rate_divisor > 0) || !(pay.default_normal_hours > 0)) { toast('Divisor and normal hours must be above 0.', 'error'); return; }
+      save('payroll', pay, 'Payroll rules');
+    })));
 }
+
