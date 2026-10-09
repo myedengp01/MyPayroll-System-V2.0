@@ -9,6 +9,10 @@ const state = { session: null, me: null, brand: [], recovery: false };
 // ---------------------------------------------------------------- routes
 const ROUTES = {
   'dashboard':              { label: 'Overview',               load: () => import('./modules/dashboard.js') },
+  'employees':              { label: 'Employees',              load: () => import('./modules/employees.js') },
+  'employees/:id':          { label: 'Employee',               load: () => import('./modules/employee.js'), menu: 'employees' },
+  'employees/ids':          { label: 'Employee IDs',           load: () => import('./modules/eid.js') },
+  'employees/import':       { label: 'Import from workbook',   load: () => import('./modules/import.js'), roles: ['admin'] },
   'settings/companies':     { label: 'Companies',              load: () => import('./modules/companies.js') },
   'settings/org':           { label: 'Departments & job titles', load: () => import('./modules/org.js') },
   'settings/lists':         { label: 'Pick-lists',             load: () => import('./modules/lists.js') },
@@ -21,12 +25,28 @@ const ROUTES = {
 };
 const MENU = [
   { group: null, items: ['dashboard'] },
-  { group: 'People', soon: [['Employees', 'Phase 2'], ['Employee ID generator', 'Phase 2']] },
+  { group: 'People', items: ['employees', 'employees/ids', 'employees/import'] },
   { group: 'Time & leave', soon: [['Leave & attendance', 'Phase 3'], ['AL calculator', 'Phase 3']] },
   { group: 'Payroll', soon: [['Monthly payroll', 'Phase 4'], ['Payslips & reports', 'Phase 5']] },
   { group: 'Settings', items: ['settings/companies', 'settings/org', 'settings/lists', 'settings/payment-types',
     'settings/statutory', 'settings/holidays', 'settings/policies', 'settings/users', 'settings/audit'] },
 ];
+
+/** '#/employees/42?tab=pay' -> { key:'employees/:id', params:{id:'42'}, query:{tab:'pay'} } */
+function matchRoute(hash) {
+  const [path, qs] = hash.replace(/^#\/?/, '').split('?');
+  const query = Object.fromEntries(new URLSearchParams(qs || ''));
+  const clean = path || 'dashboard';
+  if (ROUTES[clean]) return { key: clean, params: {}, query };
+  const parts = clean.split('/');
+  for (const key of Object.keys(ROUTES)) {
+    const kp = key.split('/');
+    if (kp.length !== parts.length) continue;
+    const params = {};
+    if (kp.every((seg, i) => (seg.startsWith(':') ? ((params[seg.slice(1)] = decodeURIComponent(parts[i])), true) : seg === parts[i]))) return { key, params, query };
+  }
+  return { key: 'dashboard', params: {}, query };
+}
 
 const can = (roles) => !!state.me && state.me.status === 'active' && roles.includes(state.me.role);
 const ctx = {
@@ -256,9 +276,12 @@ function renderShell() {
 
 let renderToken = 0;
 async function renderPage() {
-  const key = location.hash.replace(/^#\//, '') || 'dashboard';
-  const r = ROUTES[key] && (!ROUTES[key].roles || can(ROUTES[key].roles)) ? ROUTES[key] : ROUTES.dashboard;
-  document.querySelectorAll('.menu a').forEach((a) => a.classList.toggle('active', a.dataset.route === key));
+  const m = matchRoute(location.hash);
+  const allowed = ROUTES[m.key] && (!ROUTES[m.key].roles || can(ROUTES[m.key].roles));
+  const key = allowed ? m.key : 'dashboard';
+  const r = ROUTES[key];
+  const menuKey = r.menu || key;
+  document.querySelectorAll('.menu a').forEach((a) => a.classList.toggle('active', a.dataset.route === menuKey));
   document.title = `${r.label} · MyPayroll V2.0`;
   const token = ++renderToken;
   clear(mainEl).append(h('div', { class: 'loading' }, 'Loading…'));
@@ -266,9 +289,10 @@ async function renderPage() {
     const mod = await r.load();
     if (token !== renderToken) return;
     const container = h('div', {});
-    await mod.render(container, ctx);
+    await mod.render(container, ctx, allowed ? m.params : {}, allowed ? m.query : {});
     if (token !== renderToken) return;
     clear(mainEl).append(container, h('p', { class: 'footer-uvn' }, `${APP_NAME} · ${VERSION}`));
+    if (!m.query.keepScroll) window.scrollTo(0, 0);
   } catch (err) {
     console.error(err);
     clear(mainEl).append(h('div', { class: 'panel' }, h('div', { class: 'panel-body' },

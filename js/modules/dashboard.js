@@ -3,13 +3,14 @@ import { h, pageHead } from '../ui.js';
 
 export async function render(el, ctx) {
   const year = new Date().getFullYear();
-  const [comp, vers, hol, pend] = await Promise.all([
+  const [comp, vers, hol, pend, emps] = await Promise.all([
     ctx.sb.from('eppd_companies').select('code,name,is_primary,logo,epf_employer_no,socso_employer_no,tax_employer_no').eq('is_active', true),
     ctx.sb.from('eppd_stat_versions').select('id', { count: 'exact', head: true }),
     ctx.sb.from('eppd_holidays').select('id', { count: 'exact', head: true })
       .gte('holiday_date', `${year}-01-01`).lte('holiday_date', `${year}-12-31`),
     ctx.can(['admin']) ? ctx.sb.from('eppd_user_roles').select('user_id', { count: 'exact', head: true }).eq('status', 'pending')
                        : Promise.resolve({ count: 0 }),
+    ctx.sb.from('eppd_employees').select('id', { count: 'exact', head: true }),
   ]);
   const primary = (comp.data || []).filter((c) => c.is_primary);
   const withLogo = primary.filter((c) => c.logo).length;
@@ -26,12 +27,14 @@ export async function render(el, ctx) {
       detail: `${hol.count || 0} holidays for ${year}`, href: '#/settings/holidays' },
     { done: true, text: 'Review statutory treatment of each payment type', detail: 'Cash Ang Bao, bonus, allowances…', href: '#/settings/payment-types', optional: true },
   ];
+  items.splice(0, 0, { done: (emps.count || 0) > 0, text: 'Import staff from the MEG-EPPD workbook',
+    detail: emps.count ? `${emps.count} people on record` : 'No employees yet', href: emps.count ? '#/employees' : (ctx.can(['admin']) ? '#/employees/import' : '#/employees') });
   if (ctx.can(['admin'])) items.push({ done: (pend.count || 0) === 0, text: 'Approve waiting user accounts',
     detail: `${pend.count || 0} waiting`, href: '#/settings/users' });
 
   el.append(
     pageHead(`Hello, ${ctx.me.display_name || ctx.me.email.split('@')[0]}`,
-      'Phase 1 sets up the foundations: companies, lists, statutory tables, policies and access. Staff records and payroll arrive in the next phases.'),
+      'Foundations and staff records are live. Leave, payroll and payslips arrive in the next phases.'),
     h('section', { class: 'panel' },
       h('div', { class: 'panel-head' }, h('h2', {}, 'Setup checklist')),
       h('ul', { class: 'checklist' }, items.map((i) => h('li', {},
@@ -42,8 +45,8 @@ export async function render(el, ctx) {
       h('div', { class: 'panel-head' }, h('h2', {}, 'Build plan')),
       h('div', { class: 'roadmap' }, [
         ['Phase 1', 'Foundations: access, companies, lists, statutory tables, policies', 'Live'],
-        ['Phase 2', 'Employees, Employee ID generator, salary & allowance history, Excel import', 'Next'],
-        ['Phase 3', 'Leave & attendance, AL calculator, OT and part-time hours', ''],
+        ['Phase 2', 'Employees, Employee ID generator, salary & allowance history, Excel import', 'Live'],
+        ['Phase 3', 'Leave & attendance, AL calculator, OT and part-time hours', 'Next'],
         ['Phase 4', 'Monthly payroll engine and approval workflow', ''],
         ['Phase 5', 'Payslips, monthly summary, statutory & bank files', ''],
         ['Phase 6', 'PCB, self-service, MEG-FORMS claims, final settlement, loans', ''],

@@ -1,0 +1,235 @@
+// Employee profile: personal, employment periods, pay (salary history, allowances, statutory switches)
+import { h, clear, fmtDate, money, toast, failed, switchToggle, confirmDialog } from '../ui.js';
+import { loadRef } from '../data.js';
+import { employmentStatus, serviceLength, formatService, todayIso, ageOn, socsoFromNric, salaryAsOf } from '../engines/employee.js';
+import { computeNotice } from '../engines/notice.js';
+import { statusTag } from './employees.js';
+import { editPerson, editPrivate, editEmployment, recordResignation, editAssignment, editSalary, editAllowance, deleteRow } from '../employee-forms.js';
+
+const STAT_FLAGS = [['epf_ee', 'EPF', 'employee'], ['epf_er', 'EPF', 'employer'], ['socso_ee', 'SOCSO', 'employee'], ['socso_er', 'SOCSO', 'employer'],
+  ['eis_ee', 'EIS', 'employee'], ['eis_er', 'EIS', 'employer']];
+
+export async function render(el, ctx, params, query) {
+  const id = Number(params.id);
+  const canHR = ctx.can(['admin', 'hr']);
+  const ref = await loadRef(ctx.sb);
+  const today = todayIso();
+  const st = { tab: query.tab || 'personal', emplId: query.period ? Number(query.period) : null };
+  let D = null;
+
+  async function load() {
+    const [emp, priv, empls] = await Promise.all([
+      ctx.sb.from('eppd_employees').select('*').eq('id', id).maybeSingle(),
+      canHR ? ctx.sb.from('eppd_employee_private').select('*').eq('employee_id', id).maybeSingle() : Promise.resolve({ data: null }),
+      ctx.sb.from('eppd_employments').select('*').eq('employee_id', id).order('join_date', { ascending: false, nullsFirst: false }).order('id', { ascending: false }),
+    ]);
+    if (failed(emp.error, 'Load') || failed(empls.error, 'Load')) return false;
+    if (!emp.data) return null;
+    const emplIds = empls.data.map((e) => e.id);
+    const asg = emplIds.length ? await ctx.sb.from('eppd_assignments').select('*').in('employment_id', emplIds).order('is_primary', { ascending: false }).order('id') : { data: [] };
+    const asgIds = (asg.data || []).map((a) => a.id);
+    let sal = { data: [] }, alw = { data: [] };
+    if (canHR && asgIds.length) {
+      [sal, alw] = await Promise.all([
+        ctx.sb.from('eppd_salary_history').select('*').in('assignment_id', asgIds).order('effective_from', { ascending: false }),
+        ctx.sb.from('eppd_allowances').select('*').in('assignment_id', asgIds).order('start_date', { ascending: false, nullsFirst: false }),
+      ]);
+    }
+    D = { emp: emp.data, priv: priv.data, empls: empls.data, asg: asg.data || [], sal: sal.data || [], alw: alw.data || [] };
+    if (!st.emplId || !D.empls.some((e) => e.id === st.emplId)) st.emplId = D.empls[0]?.id || null;
+    return true;
+  }
+
+  const loaded = await load();
+  if (loaded === null) {
+    el.append(h('div', { class: 'empty-state' }, h('h2', {}, 'Employee not found'), h('a', { class: 'btn', href: '#/employees' }, 'Back to employees')));
+    return;
+  }
+  if (!loaded) return;
+
+  const headEl = h('div', {}); const tabsEl = h('div', { class: 'tabs', role: 'tablist' }); const bodyEl = h('div', {});
+  el.append(h('p', { class: 'crumbs' }, h('a', { href: '#/employees' }, 'Employees'), ' / ', D.emp.full_name), headEl,
+    h('section', { class: 'panel' }, tabsEl, h('div', { class: 'panel-body' }, bodyEl)));
+
+  const reload = async () => { await load(); draw(); };
+  const cur = () => D.empls[0];
+  const asgOf = (emplId) => D.asg.filter((a) => a.employment_id === emplId);
+
+  function draw() {
+    // ---- header ----
+    const e = D.emp; const em = cur(); const status = employmentStatus(em, ref.confMeta, today);
+    const mainAsg = em ? asgOf(em.id)[0] : null;
+    const end = status.key === 'former' ? (em?.resigned_date || today) : today;
+    const facts = [
+      ['Paid by', mainAsg ? asgOf(em.id).map((a) => ref.company(a.company_id)?.short_name || ref.company(a.company_id)?.name).join(', ') : '—'],
+      ['Department', em?.department_id ? (ref.department(em.department_id)?.code || '') : '—'],
+      ['Job title', em?.job_title_id ? ref.jobTitle(em.job_title_id)?.name : '—'],
+      ['Joined', em?.join_date ? fmtDate(em.join_date) : '—'],
+      ['Service', em?.join_date ? formatService(serviceLength(em.join_date, end)) : '—'],
+    ];
+    if (canHR && D.priv?.dob) facts.push(['Age', `${ageOn(D.priv.dob, today)}`]);
+    clear(headEl).append(h('section', { class: 'profile-head' },
+      h('div', { class: 'profile-title' },
+        h('h1', {}, e.full_name),
+        h('div', { class: 'profile-sub' },
+          e.chinese_name ? h('span', {}, e.chinese_name) : null,
+          h('span', { class: 'id-chip' }, e.emp_id || 'No Employee ID'),
+          statusTag(status, em?.confirmation_status),
+          D.empls.length > 1 ? h('span', { class: 'tag' }, `${D.empls.length} employment periods`) : null)),
+      canHR ? h('div', { class: 'page-actions' },
+        !e.emp_id ? h('button', { class: 'btn', type: 'button', onclick: generateId }, 'Generate Employee ID') : null,
+        em && status.key === 'current' ? h('button', { class: 'btn', type: 'button', onclick: () => recordResignation(ctx, ref, em, reload) }, 'Record resignation') : null) : null,
+      h('dl', { class: 'facts-row' }, facts.map(([k, v]) => h('div', {}, h('dt', {}, k), h('dd', {}, v || '—'))))));
+
+    // ---- tabs ----
+    const tabs = [['personal', 'Personal'], ['employment', 'Employment'], ...(canHR ? [['pay', 'Pay']] : [])];
+    if (!tabs.some(([k]) => k === st.tab)) st.tab = 'personal';
+    clear(tabsEl).append(...tabs.map(([k, l]) => h('button', { type: 'button', role: 'tab', 'aria-selected': String(st.tab === k),
+      onclick: () => { st.tab = k; history.replaceState(null, '', `#/employees/${id}?tab=${k}`); draw(); } }, l)));
+    clear(bodyEl).append(st.tab === 'personal' ? personalTab() : st.tab === 'employment' ? employmentTab() : payTab());
+  }
+
+  // ---------------------------------------------------------------- personal
+  function kv(rows) {
+    return h('dl', { class: 'kv' }, rows.filter(Boolean).map(([k, v]) => h('div', {}, h('dt', {}, k), h('dd', {}, v === null || v === undefined || v === '' ? '—' : v))));
+  }
+  function personalTab() {
+    const e = D.emp;
+    const blocks = [h('div', { class: 'block' },
+      h('div', { class: 'block-head' }, h('h2', {}, 'Personal details'),
+        canHR ? h('button', { class: 'btn sm', type: 'button', onclick: () => editPerson(ctx, ref, e, reload) }, 'Edit') : null),
+      kv([['Full name', e.full_name], ['Chinese name', e.chinese_name], ['Gender', ref.label('gender', e.gender)],
+        ['Nationality', ref.label('nationality', e.nationality)], ['Race', ref.label('race', e.race)],
+        ['Marital status', ref.label('marital_status', e.marital_status)], ['Contact no.', e.phone], ['Email', e.email],
+        ['Remarks', e.remarks]]))];
+    if (canHR) {
+      const p = D.priv || {};
+      const socso = p.socso_no || socsoFromNric(p.nric);
+      blocks.push(h('div', { class: 'block' },
+        h('div', { class: 'block-head' }, h('div', {}, h('h2', {}, 'Identity & bank'), h('p', { class: 'small muted' }, 'Visible to admins and HR only.')),
+          h('button', { class: 'btn sm', type: 'button', onclick: () => editPrivate(ctx, ref, e, D.priv, reload) }, 'Edit')),
+        kv([['NRIC', p.nric], ['Passport no.', p.passport_no], ['Date of birth', p.dob ? `${fmtDate(p.dob)} (age ${ageOn(p.dob, today)})` : null],
+          ['Home address', p.home_address], ['Spouse', p.spouse_name],
+          ['Bank', [ref.label('bank', p.bank_code), p.bank_account_no].filter(Boolean).join(' · ')],
+          ['EPF no.', p.epf_no], ['SOCSO no.', socso ? `${socso}${p.socso_no ? '' : ' (from NRIC)'}` : null], ['Income tax no.', p.tax_no],
+          ['Emergency contact', [p.emergency_name, p.emergency_relation, p.emergency_phone].filter(Boolean).join(' · ')]])));
+    }
+    return h('div', { class: 'grid-2 blocks' }, blocks);
+  }
+
+  // ---------------------------------------------------------------- employment
+  function employmentTab() {
+    const wrap = h('div', { class: 'stack' });
+    if (canHR) wrap.append(h('div', { class: 'side-actions' },
+      h('button', { class: 'btn sm', type: 'button', onclick: () => editEmployment(ctx, ref, id, null, reload, { companyForNew: asgOf(cur()?.id)[0]?.company_id }) }, 'Add employment period (rehire)')));
+    if (!D.empls.length) wrap.append(h('div', { class: 'empty-state' }, 'No employment record yet.'));
+    D.empls.forEach((em, i) => {
+      const status = employmentStatus(em, ref.confMeta, today);
+      let notice = null;
+      if (em.resignation_letter_date && ref.policies.notice_period) {
+        const r = computeNotice({ joinDate: em.join_date, letterDate: em.resignation_letter_date, onProbation: em.confirmation_status === 'UP' }, ref.policies.notice_period);
+        if (r) notice = `${r.weeks} weeks (${r.days} days) from ${fmtDate(em.resignation_letter_date)} → ${fmtDate(r.noticeEnd)}`;
+      }
+      const hours = em.work_from && em.work_to ? `${String(em.work_from).slice(0, 5)} – ${String(em.work_to).slice(0, 5)}, ${em.meal_hours ?? 1} h meal` : null;
+      wrap.append(h('div', { class: 'block' },
+        h('div', { class: 'block-head' },
+          h('div', {}, h('h2', {}, i === 0 ? 'Current / latest period' : `Earlier period`),
+            h('p', { class: 'small muted' }, `${fmtDate(em.join_date) || 'No join date'} – ${em.resigned_date ? fmtDate(em.resigned_date) : 'present'}`)),
+          h('div', { class: 'side-actions' }, statusTag(status, em.confirmation_status),
+            canHR ? h('button', { class: 'btn sm', type: 'button', onclick: () => editEmployment(ctx, ref, id, em, reload) }, 'Edit') : null,
+            canHR && status.key !== 'former' ? h('button', { class: 'btn sm', type: 'button', onclick: () => recordResignation(ctx, ref, em, reload) }, em.resignation_letter_date ? 'Edit resignation' : 'Record resignation') : null)),
+        kv([['Employment status', ref.label('confirmation_status', em.confirmation_status)], ['Confirmed on', fmtDate(em.confirmed_date)],
+          ['Job status', ref.label('job_status', em.job_status)],
+          ['Department', em.department_id ? `${ref.department(em.department_id)?.code} · ${ref.department(em.department_id)?.name}` : null],
+          ['Job title', ref.jobTitle(em.job_title_id)?.name], ['Paid by', asgOf(em.id).map((a) => ref.company(a.company_id)?.name).join(', ')],
+          ['Working hours', hours], ['OT basis', `÷ ${em.ot_days ?? 26} days · normal-day OT × ${em.ot_multiplier ?? 1.5}`],
+          ['Resignation letter', fmtDate(em.resignation_letter_date)], ['Notice period', notice], ['Last working day', fmtDate(em.resigned_date)],
+          ['Notes', em.notes]])));
+    });
+    return wrap;
+  }
+
+  // ---------------------------------------------------------------- pay (HR only)
+  function payTab() {
+    const wrap = h('div', { class: 'stack' });
+    if (!D.empls.length) { wrap.append(h('div', { class: 'empty-state' }, 'Add an employment period first.')); return wrap; }
+    const em = D.empls.find((x) => x.id === st.emplId) || D.empls[0];
+    if (D.empls.length > 1) {
+      const sel = h('select', { 'aria-label': 'Employment period', style: 'width:auto' }, D.empls.map((x) => h('option', { value: x.id, selected: x.id === em.id },
+        `${fmtDate(x.join_date) || 'No join date'} – ${x.resigned_date ? fmtDate(x.resigned_date) : 'present'}`)));
+      sel.addEventListener('change', () => { st.emplId = Number(sel.value); draw(); });
+      wrap.append(h('label', { class: 'check-row' }, 'Employment period', sel));
+    }
+    for (const a of asgOf(em.id)) wrap.append(assignmentBlock(a, em));
+    wrap.append(h('div', { class: 'side-actions' },
+      h('button', { class: 'btn sm', type: 'button', onclick: () => editAssignment(ctx, ref, em.id, null, reload, { joinDate: em.join_date }) }, 'Add another paying company')));
+    return wrap;
+  }
+
+  function assignmentBlock(a, em) {
+    const c = ref.company(a.company_id);
+    const sal = D.sal.filter((s) => s.assignment_id === a.id);
+    const alw = D.alw.filter((x) => x.assignment_id === a.id);
+    const inForce = salaryAsOf(sal, today);
+    const toggles = h('div', { class: 'stat-toggles' }, STAT_FLAGS.map(([k, scheme, who]) => h('label', { class: 'check-row' },
+      switchToggle(a[k], (v, input) => saveFlag(a, k, v, input), { label: `${scheme} ${who}` }), `${scheme} (${who})`)),
+      h('label', { class: 'check-row' }, switchToggle(a.socso_nei_opt_out, (v, input) => saveFlag(a, 'socso_nei_opt_out', v, input), { label: 'SOCSO NEI opt-out' }),
+        'SOCSO NEI opt-out (pays invalidity only)'));
+    const salTable = sal.length ? h('table', { class: 'data' },
+      h('thead', {}, h('tr', {}, h('th', {}, 'Effective from'), h('th', { class: 'num' }, 'Basic (RM)'), h('th', {}, 'Paid'), h('th', {}, 'Reason'), h('th', {}))),
+      h('tbody', {}, sal.map((s) => h('tr', { class: s === inForce ? 'hit' : '' },
+        h('td', {}, fmtDate(s.effective_from), s === inForce ? h('span', { class: 'tag ok', style: 'margin-left:.5rem' }, 'In force') : null,
+          s.effective_from > today ? h('span', { class: 'tag info', style: 'margin-left:.5rem' }, 'Upcoming') : null),
+        h('td', { class: 'num' }, money(s.amount)), h('td', {}, s.pay_basis === 'hourly' ? 'Per hour' : 'Monthly'),
+        h('td', { class: 'small' }, s.reason || '', s.note ? h('div', { class: 'muted' }, s.note) : null),
+        h('td', { class: 'actions' }, h('button', { class: 'btn sm', type: 'button', onclick: () => editSalary(ctx, a.id, s, reload) }, 'Edit'),
+          h('button', { class: 'btn sm ghost', type: 'button', onclick: () => deleteRow(ctx, 'eppd_salary_history', s.id, 'salary record', reload) }, 'Delete'))))))
+      : h('p', { class: 'muted small' }, 'No salary recorded yet.');
+    const alwTable = alw.length ? h('table', { class: 'data' },
+      h('thead', {}, h('tr', {}, h('th', {}, 'Allowance'), h('th', { class: 'num' }, 'Per month (RM)'), h('th', {}, 'From'), h('th', {}, 'Until'), h('th', {}, ''), h('th', {}))),
+      h('tbody', {}, alw.map((x) => {
+        const live = (!x.start_date || x.start_date <= today) && (!x.end_date || x.end_date >= today);
+        return h('tr', { class: live ? '' : 'inactive' },
+          h('td', {}, ref.paymentTypes.find((t) => t.id === x.payment_type_id)?.name || '?'),
+          h('td', { class: 'num' }, money(x.amount)), h('td', {}, fmtDate(x.start_date) || '—'), h('td', {}, fmtDate(x.end_date) || 'Ongoing'),
+          h('td', {}, live ? h('span', { class: 'tag ok' }, 'Paying') : h('span', { class: 'tag' }, x.start_date > today ? 'Starts later' : 'Ended')),
+          h('td', { class: 'actions' }, h('button', { class: 'btn sm', type: 'button', onclick: () => editAllowance(ctx, ref, a.id, x, reload) }, 'Edit'),
+            h('button', { class: 'btn sm ghost', type: 'button', onclick: () => deleteRow(ctx, 'eppd_allowances', x.id, 'allowance', reload) }, 'Delete')));
+      })))
+      : h('p', { class: 'muted small' }, 'No recurring allowances.');
+
+    return h('div', { class: 'block' },
+      h('div', { class: 'block-head' },
+        h('div', {}, h('h2', {}, c?.name || 'Company'),
+          h('p', { class: 'small muted' }, `${a.is_primary ? 'Main company · ' : ''}${fmtDate(a.start_date) || '—'} – ${a.end_date ? fmtDate(a.end_date) : 'ongoing'}`)),
+        h('div', { class: 'side-actions' },
+          inForce ? h('span', { class: 'big-num' }, `RM ${money(inForce.amount)}${inForce.pay_basis === 'hourly' ? ' / hr' : ''}`) : null,
+          h('button', { class: 'btn sm', type: 'button', onclick: () => editAssignment(ctx, ref, em.id, a, reload) }, 'Edit'),
+          asgOf(em.id).length > 1 ? h('button', { class: 'btn sm ghost', type: 'button', onclick: () => removeAssignment(a) }, 'Remove') : null)),
+      h('h3', { class: 'sub' }, 'Statutory contributions'), toggles,
+      h('div', { class: 'sub-head' }, h('h3', { class: 'sub' }, 'Salary history'),
+        h('button', { class: 'btn sm', type: 'button', onclick: () => editSalary(ctx, a.id, null, reload) }, 'Add salary change')),
+      h('div', { class: 'table-wrap' }, salTable),
+      h('div', { class: 'sub-head' }, h('h3', { class: 'sub' }, 'Recurring allowances'),
+        h('button', { class: 'btn sm', type: 'button', onclick: () => editAllowance(ctx, ref, a.id, null, reload, { joinDate: em.join_date }) }, 'Add allowance')),
+      h('div', { class: 'table-wrap' }, alwTable));
+  }
+
+  async function saveFlag(a, k, v, input) {
+    const { error } = await ctx.sb.from('eppd_assignments').update({ [k]: v }).eq('id', a.id);
+    if (failed(error)) { input.checked = !v; return; }
+    a[k] = v; toast('Saved.');
+  }
+  async function removeAssignment(a) {
+    if (!(await confirmDialog('Remove company', `Stop recording ${ref.company(a.company_id)?.name} as paying this person? Its salary history and allowances are deleted too.`, 'Remove', true))) return;
+    const { error } = await ctx.sb.from('eppd_assignments').delete().eq('id', a.id);
+    if (!failed(error, 'Remove')) { toast('Company removed.'); reload(); }
+  }
+  async function generateId() {
+    const { data, error } = await ctx.sb.rpc('eppd_generate_emp_id', { p_employee_id: id });
+    if (failed(error, 'Generate ID')) return;
+    toast(`Employee ID ${data} assigned.`); reload();
+  }
+
+  draw();
+}
