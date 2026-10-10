@@ -6,7 +6,7 @@ import { loadFinalisedRuns, loadLines, loadPeopleDetails } from '../report-data.
 import { downloadXlsx } from '../xlsx-export.js';
 import { loadLeaveYear, balancesFor, loadPeople } from '../leave-data.js';
 import { payslipModel, sumLines, paidLines, summaryColumns, itemsByCode, ytdRows, eaFigures, socsoNo } from '../engines/reports.js';
-import { monthLabel, periodOf } from '../engines/payroll.js';
+import { monthLabel, periodOf, STAT_COLS, STAT_LEGEND, statVal } from '../engines/payroll.js';
 import { lastDayOfMonth, todayIso } from '../engines/employee.js';
 
 const VIEWS = [['payslips', 'Payslips'], ['summary', 'Monthly summary'], ['payment', 'Payment list'], ['epf', 'EPF'], ['socso', 'SOCSO & EIS'], ['pcb', 'PCB'], ['ytd', 'Year to date'], ['ea', 'EA forms']];
@@ -132,9 +132,9 @@ export async function render(el, ctx, params, query) {
       h('div', { class: 'doc-net' }, h('span', {}, m.claims.length ? 'NET PAY (incl. claims)' : 'NET PAY'), h('b', {}, `RM ${money(m.netPaid)}`)),
       h('div', { class: 'doc-three' },
         h('table', { class: 'doc-table small' }, h('thead', {}, h('tr', {}, h('th', {}, 'Employer contributions'), h('th', { class: 'num' }, 'RM'))),
-          h('tbody', {}, m.statutory.map((s) => h('tr', {}, h('td', {}, s.label), h('td', { class: 'num' }, money(s.er)))))),
+          h('tbody', {}, m.statutory.filter((s) => s.er !== null).map((s) => h('tr', {}, h('td', {}, s.label.replace(' – Invalidity', '')), h('td', { class: 'num' }, money(s.er)))))),
         h('table', { class: 'doc-table small' }, h('thead', {}, h('tr', {}, h('th', {}, `Year to date ${month.slice(0, 4)}`), h('th', { class: 'num' }, 'RM'))),
-          h('tbody', {}, [['Gross pay', m.ytd.gross], ['EPF', m.ytd.epf_ee], ['SOCSO', m.ytd.socso_ee], ['EIS', m.ytd.eis_ee], ['PCB', m.ytd.pcb], ['Net paid', m.ytd.net_paid]]
+          h('tbody', {}, [['Gross pay', m.ytd.gross], ['EPF', m.ytd.epf_ee], ['SOCSO – Invalidity', statVal(m.ytd, 'socso_ee_inv')], ['SOCSO – NEI', m.ytd.socso_ee_nei], ['EIS', m.ytd.eis_ee], ['PCB', m.ytd.pcb], ['Net paid', m.ytd.net_paid]]
             .map(([k, v]) => h('tr', {}, h('td', {}, k), h('td', { class: 'num' }, money(v)))))),
         h('table', { class: 'doc-table small' }, h('thead', {}, h('tr', {}, h('th', {}, `Leave at ${fmtDate(lastDayOfMonth(month))}`), h('th', { class: 'num' }, 'Days left'))),
           h('tbody', {}, leave ? [['Annual leave', leave.AL.balance], ['Sick leave', leave.SL.balance], ['Replacement leave', leave.RL.balance]].map(([k, v]) => h('tr', {}, h('td', {}, k), h('td', { class: 'num' }, String(v ?? '—'))))
@@ -179,6 +179,7 @@ export async function render(el, ctx, params, query) {
       groups.length ? null : h('div', { class: 'empty-state' }, 'Nobody was paid in this month for the selected company.'));
   }
   const sumK = (lines, k) => n2(lines.reduce((s, l) => s + (Number(l[k]) || 0), 0));
+  const sumS = (lines, k) => n2(lines.reduce((s, l) => s + statVal(l, k), 0));
   const nric = (l) => person(l.employee_id).priv.nric || person(l.employee_id).priv.passport_no || '';
 
   if (view === 'payment') {
@@ -192,18 +193,19 @@ export async function render(el, ctx, params, query) {
   if (view === 'epf') {
     return listView({ title: 'EPF (KWSP) contributions', file: 'epf', numCols: [4, 5, 6, 7],
       desc: 'Wages are the amounts subject to EPF. Key these into KWSP i-Akaun (Majikan).',
-      header: ['No.', 'Name', 'NRIC / Passport', 'EPF no.', 'Wage (RM)', 'Employee (RM)', 'Employer (RM)', 'Total (RM)'],
+      header: ['No.', 'Name', 'NRIC / Passport', 'EPF no.', 'Wage (RM)', 'Employee (RM)', 'Employer (RM)', 'Total to pay (RM)'],
       rowFor: (l, i) => (n2(l.epf_ee) || n2(l.epf_er) ? [i, l.emp_name, nric(l), person(l.employee_id).priv.epf_no || '', l.epf_wage, l.epf_ee, l.epf_er, n2(l.epf_ee) + n2(l.epf_er)] : null),
       totalsFor: (ls) => ['', 'Total', '', '', sumK(ls, 'epf_wage'), sumK(ls, 'epf_ee'), sumK(ls, 'epf_er'), sumK(ls, 'epf_ee') + sumK(ls, 'epf_er')],
       check: (l) => ((n2(l.epf_ee) || n2(l.epf_er)) && !person(l.employee_id).priv.epf_no ? `${l.emp_name}: no EPF number` : null) });
   }
   if (view === 'socso') {
-    return listView({ title: 'SOCSO & EIS contributions', file: 'socso_eis', numCols: [4, 5, 6, 7, 8, 9, 10],
-      desc: 'SOCSO number is the one on record, otherwise the NRIC digits. Key these into PERKESO ASSIST.',
-      header: ['No.', 'Name', 'NRIC / Passport', 'SOCSO no.', 'SOCSO wage', 'SOCSO ee', 'SOCSO er', 'EIS wage', 'EIS ee', 'EIS er', 'Total (RM)'],
-      rowFor: (l, i) => (n2(l.socso_ee) + n2(l.socso_er) + n2(l.eis_ee) + n2(l.eis_er) ? [i, l.emp_name, nric(l), socsoNo(person(l.employee_id).priv), l.socso_wage, l.socso_ee, l.socso_er, l.eis_wage, l.eis_ee, l.eis_er,
+    return listView({ title: 'SOCSO & EIS contributions', file: 'socso_eis', numCols: [4, 5, 6, 7, 8, 9, 10, 11],
+      desc: `SOCSO number is the one on record, otherwise the NRIC digits. Key these into PERKESO ASSIST. ${STAT_LEGEND}. Total to pay = all SOCSO and EIS shares.`,
+      header: ['No.', 'Name', 'NRIC / Passport', 'SOCSO no.', 'SOCSO wage', 'SOCSO ee Inv.', 'SOCSO ee NEI', 'SOCSO er', 'EIS wage', 'EIS ee', 'EIS er', 'Total to pay (RM)'],
+      rowFor: (l, i) => (n2(l.socso_ee) + n2(l.socso_er) + n2(l.eis_ee) + n2(l.eis_er) ? [i, l.emp_name, nric(l), socsoNo(person(l.employee_id).priv), l.socso_wage,
+        statVal(l, 'socso_ee_inv'), statVal(l, 'socso_ee_nei'), l.socso_er, l.eis_wage, l.eis_ee, l.eis_er,
         n2(l.socso_ee) + n2(l.socso_er) + n2(l.eis_ee) + n2(l.eis_er)] : null),
-      totalsFor: (ls) => ['', 'Total', '', '', sumK(ls, 'socso_wage'), sumK(ls, 'socso_ee'), sumK(ls, 'socso_er'), sumK(ls, 'eis_wage'), sumK(ls, 'eis_ee'), sumK(ls, 'eis_er'),
+      totalsFor: (ls) => ['', 'Total', '', '', sumK(ls, 'socso_wage'), sumS(ls, 'socso_ee_inv'), sumK(ls, 'socso_ee_nei'), sumK(ls, 'socso_er'), sumK(ls, 'eis_wage'), sumK(ls, 'eis_ee'), sumK(ls, 'eis_er'),
         sumK(ls, 'socso_ee') + sumK(ls, 'socso_er') + sumK(ls, 'eis_ee') + sumK(ls, 'eis_er')] });
   }
   if (view === 'pcb') {
@@ -218,11 +220,10 @@ export async function render(el, ctx, params, query) {
   // ======================================================== MONTHLY SUMMARY
   if (view === 'summary') {
     const cols = summaryColumns(monthLines, new Map((await ctx.sb.from('eppd_payment_types').select('code,name,sort_order')).data?.map((t) => [t.code, t]) || []));
-    const fixed = [['gross', 'Gross'], ['epf_ee', 'EPF ee'], ['epf_er', 'EPF er'], ['socso_ee', 'SOCSO ee'], ['socso_er', 'SOCSO er'], ['eis_ee', 'EIS ee'], ['eis_er', 'EIS er'],
-      ['pcb', 'PCB'], ['net', 'Net pay'], ['personal_deductions', 'Personal deductions'], ['net_paid', 'Net paid']];
+    const fixed = [['gross', 'Gross'], ...STAT_COLS, ['pcb', 'PCB'], ['net', 'Net pay'], ['personal_deductions', 'Personal deductions'], ['net_paid', 'Net paid']];
     const header = ['No.', 'Employee ID', 'Name', ...cols.map((c) => (c.kind === 'deduction' ? `${c.label} (−)` : c.label)), ...fixed.map(([, l]) => l)];
-    const rowOf = (l, i) => { const m = itemsByCode(l); return [i, l.emp_code || '', l.emp_name, ...cols.map((c) => m[c.code] || 0), ...fixed.map(([k]) => n2(l[k]))]; };
-    const totalOf = (ls, label) => ['', '', label, ...cols.map((c) => n2(ls.reduce((s, l) => s + (itemsByCode(l)[c.code] || 0), 0))), ...fixed.map(([k]) => sumK(ls, k))];
+    const rowOf = (l, i) => { const m = itemsByCode(l); return [i, l.emp_code || '', l.emp_name, ...cols.map((c) => m[c.code] || 0), ...fixed.map(([k]) => statVal(l, k))]; };
+    const totalOf = (ls, label) => ['', '', label, ...cols.map((c) => n2(ls.reduce((s, l) => s + (itemsByCode(l)[c.code] || 0), 0))), ...fixed.map(([k]) => sumS(ls, k))];
     const groups = companiesIn(monthLines).map((cid) => ({ cid, lines: monthLines.filter((l) => (l.company_id || 0) === cid).sort((a, b) => a.emp_name.localeCompare(b.emp_name)) }));
     const numFrom = 3;
     actions.append(h('button', { class: 'btn primary', type: 'button', disabled: !groups.length, onclick: async () => {
@@ -239,8 +240,9 @@ export async function render(el, ctx, params, query) {
       h('tbody', {}, ls.map((l, i) => h('tr', {}, rowOf(l, i + 1).map((v, j) => h('td', { class: j >= numFrom ? 'num' : (j === 2 ? 'nowrap' : '') }, j >= numFrom ? (v ? money(v) : '') : v))))),
       h('tfoot', {}, h('tr', {}, totalOf(ls, label).map((v, j) => h('th', { class: j >= numFrom ? 'num' : '' }, j >= numFrom ? money(v) : v)))));
     const T = sumLines(monthLines);
-    body.append(h('div', { class: 'facts' }, [[T.lines, 'staff paid'], [money(T.gross), 'gross'], [money(T.epf_ee + T.epf_er), 'EPF'], [money(T.socso_ee + T.socso_er), 'SOCSO'],
-      [money(T.eis_ee + T.eis_er), 'EIS'], [money(T.pcb), 'PCB'], [money(T.net_paid), 'net paid'], [money(T.employer_cost), 'employer cost']].map(([v, l]) => h('div', { class: 'fact' }, h('b', {}, v), h('span', {}, l)))),
+    body.append(h('div', { class: 'facts' }, [[T.lines, 'staff paid'], [money(T.gross), 'gross'],
+      ...STAT_COLS.map(([k, l]) => [money(statVal(T, k)), l]), [money(T.pcb), 'PCB'], [money(T.net_paid), 'net paid'], [money(T.employer_cost), 'employer cost']].map(([v, l]) => h('div', { class: 'fact' }, h('b', {}, v), h('span', {}, l)))),
+      h('p', { class: 'small muted', style: 'margin:-.4rem 0 1rem' }, STAT_LEGEND),
       ...groups.map((g) => h('section', { class: 'panel' }, h('div', { class: 'panel-head' }, h('h2', {}, coName(g.cid))), h('div', { class: 'table-wrap' }, tbl(g.lines, `Total (${g.lines.length})`)))));
     return;
   }
@@ -250,16 +252,16 @@ export async function render(el, ctx, params, query) {
   const lastMonth = yearLines.reduce((m, l) => (l.period > m ? l.period : m), '');
   if (view === 'ytd') {
     const rows = ytdRows(yearLines);
-    const keys = [['gross', 'Gross'], ['epf_ee', 'EPF ee'], ['epf_er', 'EPF er'], ['socso_ee', 'SOCSO ee'], ['socso_er', 'SOCSO er'], ['eis_ee', 'EIS ee'], ['eis_er', 'EIS er'], ['pcb', 'PCB'], ['net_paid', 'Net paid']];
+    const keys = [['gross', 'Gross'], ...STAT_COLS, ['pcb', 'PCB'], ['net_paid', 'Net paid']];
     const header = ['Employee ID', 'Name', 'Company', 'Months', ...keys.map(([, l]) => l)];
-    const rowOf = (r) => [r.emp_code || '', r.emp_name, coShort(r.company_id), r.months, ...keys.map(([k]) => r[k])];
+    const rowOf = (r) => [r.emp_code || '', r.emp_name, coShort(r.company_id), r.months, ...keys.map(([k]) => statVal(r, k))];
     const T = sumLines(yearLines);
-    const total = ['', `Total (${rows.length})`, '', '', ...keys.map(([k]) => T[k])];
+    const total = ['', `Total (${rows.length})`, '', '', ...keys.map(([k]) => statVal(T, k))];
     actions.append(h('button', { class: 'btn primary', type: 'button', disabled: !rows.length, onclick: async () => {
       try { await downloadXlsx(`year_to_date_${year}.xlsx`, [{ name: `YTD ${year}`, title: ['MyEden Group · year to date', `${year} · January to ${lastMonth ? monthLabel(lastMonth) : '—'}`], header, rows: rows.map(rowOf), total }]); }
       catch (e) { toast(e.message || String(e), 'error'); }
     } }, 'Download Excel'));
-    body.append(h('p', { class: 'small muted', style: 'margin-bottom:1rem' }, `Finalised months of ${year}${lastMonth ? `, January to ${monthLabel(lastMonth)}` : ''}. One row per person per paying company.`),
+    body.append(h('p', { class: 'small muted', style: 'margin-bottom:1rem' }, `Finalised months of ${year}${lastMonth ? `, January to ${monthLabel(lastMonth)}` : ''}. One row per person per paying company. ${STAT_LEGEND}.`),
       h('section', { class: 'panel' }, h('div', { class: 'table-wrap' }, h('table', { class: 'data' },
         h('thead', {}, h('tr', {}, header.map((t, i) => h('th', { class: i >= 3 ? 'num' : '' }, t)))),
         h('tbody', {}, rows.map((r) => h('tr', {}, rowOf(r).map((v, i) => h('td', { class: i >= 3 ? 'num' : '' }, i >= 4 ? money(v) : v))))),

@@ -4,6 +4,7 @@
 // Uses the values Excel last calculated (cached cell values), never re-evaluates formulas.
 
 import { excelSerialToIso } from './employee.js';
+import { splitSocsoTotal } from './statutory.js';
 import { itemFromType, computeLine, activeWindow, periodOf, r2, lineSummary, runTotals, STAT_KEYS, monthLabel, buildRun, recomputeLine } from './payroll.js';
 
 export const PAYROLL_SHEET = 'PayrollSMRY2026';
@@ -16,7 +17,7 @@ const ITEM_COLS = [
 ];
 const PERSONAL_COLS = [['VN', 'CHILDCARE'], ['VT', 'LOAN'], ['VZ', 'OTHER_DED']];
 const STAT_COLS = { epf_ee: 'SB', epf_er: 'SN', socso_ee: 'SZ', socso_er: 'TL', eis_ee: 'TX', eis_er: 'UJ' };
-const READ = ['O', 'U', 'LF', 'LR', 'LX', 'LL', 'NB', 'NH', 'KT', 'RP', 'NN', 'VB', 'VH', 'WL',
+const READ = ['O', 'U', 'SQ', 'LF', 'LR', 'LX', 'LL', 'NB', 'NH', 'KT', 'RP', 'NN', 'VB', 'VH', 'WL',
   ...ITEM_COLS.map((c) => c[0]), ...PERSONAL_COLS.map((c) => c[0]), ...Object.values(STAT_COLS)];
 
 const cell = (ws, addr) => ws[addr] || null;
@@ -48,7 +49,7 @@ export function readPayrollRows(sheets) {
  * types: Map(code → payment type)
  * Returns { months:[{period, lines, totals}], issues, summary }
  */
-export function buildPayHistory(sheets, people, types, { fromPeriod = '2026-01-01' } = {}) {
+export function buildPayHistory(sheets, people, types, { fromPeriod = '2026-01-01', tables = null } = {}) {
   const rows = readPayrollRows(sheets);
   const byName = new Map();
   for (const p of people) { const k = clean(p.full_name); if (!byName.has(k)) byName.set(k, []); byName.get(k).push(p); }
@@ -90,6 +91,12 @@ export function buildPayHistory(sheets, people, types, { fromPeriod = '2026-01-0
     for (const [col, code] of PERSONAL_COLS) if (c[col] && T(code)) items.push(itemFromType(T(code), { auto: false, amount: c[col] }));
 
     const overrides = {}; for (const [k, col] of Object.entries(STAT_COLS)) overrides[k] = r2(c[col] ?? 0);
+    // the workbook keeps one employee SOCSO figure; split it into invalidity + NEI using the table for that month
+    if (tables) {
+      const sp = splitSocsoTotal(tables, { wage: c.SQ ?? c.NN, periodDate: r.period, total: overrides.socso_ee });
+      overrides.socso_ee_nei = sp.nei ?? 0;
+      if (!sp.matched) warnings.push({ level: 'warn', text: `Employee SOCSO RM${fmt(overrides.socso_ee)} matches no SOCSO table row, so it could not be split into invalidity and NEI; all of it is shown as invalidity.` });
+    }
     const line = {
       employee_id: p.id, assignment_id: pick?.a?.id ?? null, company_id: pick?.a?.company_id ?? null,
       emp_name: p.full_name, emp_code: p.emp_id || null, mode: 'fixed', excluded: false, items, overrides,
@@ -131,7 +138,7 @@ export function historyPayload(months) {
   const pick = (l) => ({ employee_id: l.employee_id, assignment_id: l.assignment_id, company_id: l.company_id, emp_name: l.emp_name, emp_code: l.emp_code,
     mode: 'fixed', excluded: !!l.excluded, items: l.items, overrides: l.overrides, inputs: l.inputs, warnings: l.warnings, note: l.note,
     gross: l.gross, epf_wage: l.epf_wage, socso_wage: l.socso_wage, eis_wage: l.eis_wage, ...Object.fromEntries(STAT_KEYS.map((k) => [k, l[k]])),
-    pcb: l.pcb, net: l.net, personal_deductions: l.personal_deductions, net_paid: l.net_paid });
+    socso_ee_nei: l.socso_ee_nei || 0, pcb: l.pcb, net: l.net, personal_deductions: l.personal_deductions, net_paid: l.net_paid });
   return { source: 'MEG-EPPD workbook', runs: months.map((m) => ({ period: m.period, totals: runTotals(m.lines), lines: m.lines.map(pick) })) };
 }
 
@@ -144,7 +151,7 @@ export function compareLines(wb, app) {
   const a = lineSummary(wb), b = lineSummary(app);
   const parts = [['basic', 'Basic'], ['overtime', 'Overtime'], ['other', 'Allowances & others'], ['unpaid', 'Unpaid leave']];
   for (const [k, label] of parts) if (Math.abs(a[k] - b[k]) > 0.01) out.push({ field: k, label, wb: a[k], app: b[k] });
-  for (const [k, label] of [['gross', 'Gross'], ['epf_ee', 'EPF'], ['socso_ee', 'SOCSO'], ['eis_ee', 'EIS'], ['epf_er', 'EPF (employer)'], ['socso_er', 'SOCSO (employer)'], ['eis_er', 'EIS (employer)']])
+  for (const [k, label] of [['gross', 'Gross'], ['epf_ee', 'EPF'], ['socso_ee', 'SOCSO'], ['socso_ee_nei', 'SOCSO NEI'], ['eis_ee', 'EIS'], ['epf_er', 'EPF (employer)'], ['socso_er', 'SOCSO (employer)'], ['eis_er', 'EIS (employer)']])
     if (Math.abs((Number(wb[k]) || 0) - (Number(app[k]) || 0)) > 0.01) out.push({ field: k, label, wb: r2(wb[k]), app: r2(app[k]) });
   return out;
 }

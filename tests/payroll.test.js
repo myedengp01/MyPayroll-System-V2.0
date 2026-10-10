@@ -155,7 +155,14 @@ test('workbook payroll history: Jan–Sep 2026 imported, figures add up, anomali
   const people = imp.payload.people.map((p) => ({ id: ++id, full_name: p.full_name, emp_id: p.emp_id, dob: p.private?.dob || null, statClass: 'MY',
     employments: p.employments.map((e) => ({ ...e, assignments: e.assignments.map((a) => ({ ...a, id: ++id, company_id: a.company_code,
       salary_history: a.salary, allowances: a.allowances.map((x, k) => ({ ...x, id: k, payment_type_id: typeByCode.get(x.payment_type_code)?.id })) })) })) }));
-  const h = buildPayHistory(wb.Sheets, people, types);
+  const h = buildPayHistory(wb.Sheets, people, types, { tables });
+  // every employee SOCSO figure splits into invalidity + NEI against the SOCSO tables
+  const unsplit = h.months.flatMap((m) => m.lines).filter((l) => l.warnings.some((w) => /could not be split/.test(w.text)));
+  assert.equal(unsplit.length, 0, unsplit.map((l) => `${l.period} ${l.emp_name} ${l.socso_ee}`).join('\n'));
+  const nei = (per) => h.months.find((m) => m.period === per).lines.filter((l) => !l.excluded).reduce((s, l) => s + l.socso_ee_nei, 0);
+  assert.equal(nei('2026-05-01'), 0, 'no NEI before June 2026');
+  assert.ok(nei('2026-06-01') > 0);
+  console.log('NEI totals Jun–Sep:', ['06', '07', '08', '09'].map((m) => Math.round(nei(`2026-${m}-01`) * 100) / 100).join(' · '));
   console.log('payroll history:', JSON.stringify(h.summary));
   assert.deepEqual(h.months.map((m) => m.period.slice(0, 7)), ['2026-01', '2026-02', '2026-03', '2026-04', '2026-05', '2026-06', '2026-07', '2026-08', '2026-09']);
   assert.equal(h.summary.unmatched, 0);

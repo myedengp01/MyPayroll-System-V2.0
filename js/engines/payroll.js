@@ -6,7 +6,7 @@
 // app's data every time the run is recalculated; manual items, PCB, overrides,
 // exclusions and notes typed by HR are kept.
 
-import { computeEPF, computeSOCSO, computeEIS, statutoryBases } from './statutory.js';
+import { computeEPF, computeSOCSO, computeEIS, statutoryBases, splitSocsoTotal } from './statutory.js';
 import { salaryForMonth, allowancesForMonth, lastDayOfMonth, isoToMs, addDays } from './employee.js';
 import { normalHours, OT_CATEGORIES } from './ot.js';
 import { computePCB, taxablePay, pcbYtd, pcbPolicy } from './pcb.js';
@@ -20,7 +20,14 @@ export const DEFAULT_PAYROLL = {
   rates: { OT_NORMAL: 1.5, OT_OFFDAY: 1.5, RD_HALF: 0.5, RD_FULL: 1, RD_EXCESS: 2, PH_NORMAL: 2, PH_EXCESS: 3 },
 };
 export const STAT_KEYS = ['epf_ee', 'epf_er', 'socso_ee', 'socso_er', 'eis_ee', 'eis_er'];
-export const STAT_LABELS = { epf_ee: 'EPF (employee)', epf_er: 'EPF (employer)', socso_ee: 'SOCSO (employee)', socso_er: 'SOCSO (employer)', eis_ee: 'EIS (employee)', eis_er: 'EIS (employer)' };
+/** The statutory columns shown everywhere, each share on its own (SOCSO employee split into invalidity + NEI). */
+export const STAT_COLS = [['epf_ee', 'EPF ee'], ['epf_er', 'EPF er'], ['socso_ee_inv', 'SOCSO ee Inv.'], ['socso_ee_nei', 'SOCSO ee NEI'],
+  ['socso_er', 'SOCSO er'], ['eis_ee', 'EIS ee'], ['eis_er', 'EIS er']];
+export const STAT_COLS_EE = STAT_COLS.filter(([k]) => !k.endsWith('_er'));
+export const STAT_LEGEND = 'ee = employee share · er = employer share · Inv. = SOCSO invalidity · NEI = SOCSO non-employment injury';
+/** Value of a STAT_COLS key on a line or a totals object. */
+export const statVal = (x, k) => (k === 'socso_ee_inv' ? r2((Number(x?.socso_ee) || 0) - (Number(x?.socso_ee_nei) || 0)) : r2(Number(x?.[k]) || 0));
+export const STAT_LABELS = { epf_ee: 'EPF (employee)', epf_er: 'EPF (employer)', socso_ee: 'SOCSO (employee)', socso_ee_inv: 'SOCSO – Invalidity (employee)', socso_ee_nei: 'SOCSO – NEI (employee)', socso_er: 'SOCSO (employer)', eis_ee: 'EIS (employee)', eis_er: 'EIS (employer)' };
 
 export const policyOf = (policies) => {
   const p = policies?.payroll || {};
@@ -219,6 +226,7 @@ export function computeLine(line, stat) {
   const bases = statutoryBases(items.filter((i) => !isPersonal(i) && i.category !== 'reimbursement').map((i) => ({ amount: itemAmount(i), type: { kind: i.kind, subject_epf: i.epf, subject_socso: i.socso, subject_eis: i.eis } })));
   const out = { gross, epf_wage: bases.epf, socso_wage: bases.socso, eis_wage: bases.eis, warnings: [] };
   const fl = stat.flags || {};
+  let neiTable = 0;
   if (stat.tables && line.mode !== 'fixed') {
     const args = { age: stat.age ?? 0, statClass: stat.statClass || 'MY', periodDate: stat.period };
     const epf = computeEPF(stat.tables, { ...args, wage: bases.epf });
@@ -226,10 +234,28 @@ export function computeLine(line, stat) {
     const eis = computeEIS(stat.tables, { ...args, wage: bases.eis }, stat.rules || {});
     for (const [k, r] of [['EPF', epf], ['SOCSO', socso], ['EIS', eis]]) if (r.missing) out.warnings.push({ level: 'warn', text: `No ${k} table in force for this month (Settings › Statutory tables).` });
     Object.assign(out, { epf_ee: epf.ee, epf_er: epf.er, socso_ee: socso.ee, socso_er: socso.er, eis_ee: eis.ee, eis_er: eis.er });
+    neiTable = socso.nei || 0;
     for (const k of STAT_KEYS) if (fl[k] === false) out[k] = 0;
+    if (fl.socso_ee === false) neiTable = 0;
   } else for (const k of STAT_KEYS) out[k] = 0;
   const ov = line.overrides || {};
-  for (const k of STAT_KEYS) if (ov[k] !== null && ov[k] !== undefined && ov[k] !== '') out[k] = Number(ov[k]);
+  const has = (v) => v !== null && v !== undefined && v !== '';
+  const socsoTable = out.socso_ee;
+  for (const k of STAT_KEYS) if (has(ov[k])) out[k] = Number(ov[k]);
+  // SOCSO employee share = invalidity + non-employment injury (NEI)
+  let nei;
+  if (has(ov.socso_ee)) {
+    // a recorded total (imported months, or typed before the split): use the recorded split, else work it out
+    if (has(ov.socso_ee_nei)) nei = Number(ov.socso_ee_nei);
+    else if (line.mode === 'fixed') nei = Number(line.socso_ee_nei) || 0;
+    else if (Math.abs(out.socso_ee - socsoTable) < 0.005) nei = neiTable;
+    else nei = stat.tables ? (splitSocsoTotal(stat.tables, { wage: bases.socso, periodDate: stat.period, total: out.socso_ee }).nei ?? Math.min(neiTable, out.socso_ee)) : 0;
+  } else if (has(ov.socso_ee_inv) || has(ov.socso_ee_nei)) {
+    const inv = has(ov.socso_ee_inv) ? Number(ov.socso_ee_inv) : r2(out.socso_ee - neiTable);
+    nei = has(ov.socso_ee_nei) ? Number(ov.socso_ee_nei) : neiTable;
+    out.socso_ee = r2(inv + nei);
+  } else nei = neiTable;
+  out.socso_ee_nei = r2(Math.max(0, Math.min(Number(nei) || 0, out.socso_ee)));
   for (const k of STAT_KEYS) out[k] = r2(out[k]);
   // PCB: typed for this month › automatic (LHDN method) › typed on the line
   const pc = line.inputs?.pcb;
@@ -422,7 +448,7 @@ export function recomputeLine(line, D) {
   return { ...line, ...tot, warnings: [...keep, ...tot.warnings.map((w) => ({ ...w, calc: true }))] };
 }
 
-const SUM_KEYS = ['gross', 'epf_ee', 'epf_er', 'socso_ee', 'socso_er', 'eis_ee', 'eis_er', 'pcb', 'net', 'personal_deductions', 'reimbursements', 'net_paid', 'employer_cost'];
+const SUM_KEYS = ['gross', 'epf_ee', 'epf_er', 'socso_ee', 'socso_ee_nei', 'socso_er', 'eis_ee', 'eis_er', 'pcb', 'net', 'personal_deductions', 'reimbursements', 'net_paid', 'employer_cost'];
 /** Run totals: whole run and per company (excluded lines left out). */
 export function runTotals(lines) {
   const blank = () => Object.fromEntries([['lines', 0], ...SUM_KEYS.map((k) => [k, 0])]);

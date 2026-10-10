@@ -95,9 +95,33 @@ export function computeSOCSO(tables, { wage, age, periodDate, neiOptOut = false 
   const variant = Number(age) >= 60 ? 'CAT2' : 'CAT1';
   const res = fromVersion(pickVersion(tables, 'SOCSO', variant, periodDate), w);
   let ee = res.ee;
-  if (neiOptOut && res.ee_inv !== null && res.ee_inv !== undefined) ee = res.ee_inv;
-  return { variant, er: res.er, ee, ee_inv: res.ee_inv ?? null, ee_nei: res.ee_nei ?? null,
+  const split = res.ee_inv !== null && res.ee_inv !== undefined;
+  if (neiOptOut && split) ee = res.ee_inv;
+  // employee share split: invalidity + non-employment injury (NEI, from Jun 2026). Before the split table, all of it is invalidity.
+  const nei = split && !neiOptOut ? Math.min(ee, num(res.ee_nei) || 0) : 0;
+  return { variant, er: res.er, ee, nei, inv: Math.round((ee - nei) * 100) / 100, ee_inv: res.ee_inv ?? null, ee_nei: res.ee_nei ?? null,
            versionId: res.versionId, label: res.label, missing: !!res.missing };
+}
+
+/**
+ * Split a recorded employee SOCSO total (e.g. imported from the workbook, which keeps one figure) into invalidity + NEI
+ * by matching it against the tables in force for that month. Tries First, then Second Category.
+ * Returns { nei, matched } — nei is null when the amount fits no table row.
+ */
+export function splitSocsoTotal(tables, { wage, periodDate, total }) {
+  const t = Math.round((Number(total) || 0) * 100) / 100;
+  if (!(t > 0)) return { nei: 0, matched: true };
+  const w = Math.round(Math.max(0, Number(wage) || 0) * 100) / 100;
+  let anySplit = false;
+  for (const variant of ['CAT1', 'CAT2']) {
+    const res = fromVersion(pickVersion(tables, 'SOCSO', variant, periodDate), w);
+    if (res.ee_inv === null || res.ee_inv === undefined) continue;
+    anySplit = true;
+    if (Math.abs(t - res.ee) < 0.005) return { nei: Math.min(t, num(res.ee_nei) || 0), matched: true, variant };
+    if (Math.abs(t - res.ee_inv) < 0.005) return { nei: 0, matched: true, variant };
+  }
+  if (!anySplit) return { nei: 0, matched: true };   // before the NEI split: all invalidity
+  return { nei: null, matched: false };
 }
 
 /** EIS.  rules = statutory_rules policy (exemptions are off by default = workbook behaviour). */

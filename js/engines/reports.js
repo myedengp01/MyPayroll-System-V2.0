@@ -9,7 +9,7 @@ const ORDER = ['BASIC', 'ALLOW_A1', 'ALLOW_A2', 'ALLOW_A3', 'LEADER', 'FIRST_AID
   'FULL_ATT', 'REFERRAL', 'BONUS', 'ANG_BAO', 'AL_BUYBACK', 'OT_NORMAL', 'OT_RESTDAY', 'OT_PH', 'UNPAID_LEAVE', 'CHILDCARE', 'LOAN', 'OTHER_DED'];
 const orderOf = (code, sortOrder) => { const i = ORDER.indexOf(code); return i >= 0 ? i : 100 + (sortOrder ?? 0); };
 const isPersonal = (i) => i.kind === 'deduction' && i.category === 'personal';
-export const STAT_SUM_KEYS = ['gross', 'epf_ee', 'epf_er', 'socso_ee', 'socso_er', 'eis_ee', 'eis_er', 'pcb', 'net', 'personal_deductions', 'reimbursements', 'net_paid'];
+export const STAT_SUM_KEYS = ['gross', 'epf_ee', 'epf_er', 'socso_ee', 'socso_ee_nei', 'socso_er', 'eis_ee', 'eis_er', 'pcb', 'net', 'personal_deductions', 'reimbursements', 'net_paid'];
 
 /** Lines that count: not left out. */
 export const paidLines = (lines) => (lines || []).filter((l) => !l.excluded);
@@ -44,11 +44,12 @@ export function payslipModel(line, ytdLines = []) {
   const s = payslipSections(line);
   const statutory = [
     { label: 'EPF (KWSP)', ee: r2(line.epf_ee), er: r2(line.epf_er) },
-    { label: 'SOCSO (PERKESO)', ee: r2(line.socso_ee), er: r2(line.socso_er) },
+    { label: 'SOCSO (PERKESO) – Invalidity', ee: r2((Number(line.socso_ee) || 0) - (Number(line.socso_ee_nei) || 0)), er: r2(line.socso_er) },
+    { label: 'SOCSO – Non-employment injury (NEI)', ee: r2(line.socso_ee_nei), er: null },
     { label: 'EIS (SIP)', ee: r2(line.eis_ee), er: r2(line.eis_er) },
   ];
   const statEe = r2(statutory.reduce((x, r) => x + r.ee, 0));
-  const statEr = r2(statutory.reduce((x, r) => x + r.er, 0));
+  const statEr = r2(statutory.reduce((x, r) => x + (r.er || 0), 0));
   const totalDeductions = r2(statEe + Number(line.pcb || 0) + Number(line.personal_deductions || 0));
   return { ...s, statutory, statEe, statEr, pcb: r2(line.pcb), gross: r2(line.gross), totalDeductions, net: r2(line.net), netPaid: r2(line.net_paid),
     claimsTotal: r2(s.claims.reduce((x, c) => x + c.amount, 0)),

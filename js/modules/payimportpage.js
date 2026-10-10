@@ -3,7 +3,7 @@ import { h, clear, pageHead, toast, failed, confirmDialog, money } from '../ui.j
 import { fetchAll, loadRef, loadStatTables } from '../data.js';
 import { loadPayPeople, loadPayTypes, loadPayInputs } from '../pay-data.js';
 import { buildPayHistory, historyPayload, compareMonth, PAYROLL_SHEET } from '../engines/payimport.js';
-import { runTotals, monthLabel } from '../engines/payroll.js';
+import { runTotals, monthLabel, STAT_COLS, STAT_LEGEND, statVal } from '../engines/payroll.js';
 
 const SHEETJS = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
 function loadSheetJS() {
@@ -36,7 +36,7 @@ export async function render(el, ctx) {
     try {
       const XLSX = await loadSheetJS();
       const wb = XLSX.read(await f.arrayBuffer(), { type: 'array', sheets: [PAYROLL_SHEET] });
-      const res = buildPayHistory(wb.Sheets, people, types.byCode);
+      const res = buildPayHistory(wb.Sheets, people, types.byCode, { tables });
       if (!res.months.length) throw new Error('No payroll months from January 2026 were found in this file.');
       status.textContent = `${f.name} read. Comparing with the new engine…`;
       const inputs = await loadPayInputs(ctx.sb, res.months[0].period, res.months[res.months.length - 1].period);
@@ -60,7 +60,7 @@ export async function render(el, ctx) {
       const T = runTotals(m.lines).all; const c = cmp.get(m.period) || [];
       const same = c.filter((x) => !x.diffs.length).length;
       return h('tr', {}, h('td', {}, monthLabel(m.period)), h('td', { class: 'num' }, T.lines), h('td', { class: 'num' }, money(T.gross)),
-        h('td', { class: 'num' }, money(T.epf_ee + T.epf_er)), h('td', { class: 'num' }, money(T.socso_ee + T.socso_er)), h('td', { class: 'num' }, money(T.eis_ee + T.eis_er)),
+        ...STAT_COLS.map(([k]) => h('td', { class: 'num' }, money(statVal(T, k)))),
         h('td', { class: 'num' }, money(T.pcb)), h('td', { class: 'num strong' }, money(T.net_paid)), h('td', { class: 'num' }, `${same} of ${c.length}`));
     }));
     drawMonths();
@@ -123,7 +123,8 @@ export async function render(el, ctx) {
     clear(out).append(facts,
       h('section', { class: 'panel' }, h('div', { class: 'panel-head' }, h('h2', {}, 'Months found')),
         h('div', { class: 'table-wrap' }, h('table', { class: 'data' },
-          h('thead', {}, h('tr', {}, ['Month', 'Lines', 'Gross', 'EPF', 'SOCSO', 'EIS', 'PCB', 'Net paid', 'Engine identical'].map((x, i) => h('th', { class: i ? 'num' : '' }, x)))), monthsBody))),
+          h('thead', {}, h('tr', {}, ['Month', 'Lines', 'Gross', ...STAT_COLS.map((c) => c[1]), 'PCB', 'Net paid', 'Engine identical'].map((x, i) => h('th', { class: i ? 'num' : '' }, x)))), monthsBody)),
+        h('p', { class: 'small muted', style: 'margin-top:.6rem' }, `${STAT_LEGEND}. The workbook keeps one employee SOCSO figure; it is split into invalidity and NEI using the SOCSO table for that month.`)),
       heldPanel, cmpPanel,
       res.issues.length ? h('section', { class: 'panel' }, h('div', { class: 'panel-body' }, h('h2', {}, 'Not imported'), h('ul', {}, res.issues.map((i) => h('li', {}, i.message))))) : null,
       h('div', { class: 'import-bar' }, h('p', { class: 'small muted' }, 'Nothing has been saved yet.'), go));

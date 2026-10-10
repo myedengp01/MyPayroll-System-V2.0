@@ -3,7 +3,7 @@
 Payroll app for MyEden Group, rebuilt from the MEG-EPPD 2026 workbook.
 Static site (GitHub Pages) + Supabase. No build step.
 
-**Current version:** v2026.10.09-20:00 · **Phase 6 – Automatic PCB, claims, loans, final settlement**
+**Current version:** v2026.10.10-17:45 · **Phase 6 – Automatic PCB, claims, loans, final settlement** (+ SOCSO NEI split)
 
 ## First-time setup
 
@@ -20,6 +20,7 @@ Run these **in order**. Each file is safe to re-run.
 | `sql/006_payroll.sql` | Phase 4: pay runs and pay lines, finalise / reopen, payroll history import, payroll policy. |
 | `sql/007_last_working_days.sql` | One-off fix: last working day for 7 former staff whose workbook "Resigned Date" was blank. |
 | `sql/008_phase6.sql` | Phase 6: tax details (automatic PCB), MEG-FORMS claims, loans, final settlement; new payment types (ZAKAT, CLAIM_SCF, CLAIM_MTCF, NOTICE_PAY, NOTICE_SHORT, AL_ENCASH); `modules`, `pcb` and `settlement` policies. All modules start **off**. |
+| `sql/009_socso_nei.sql` | Keeps the employee's SOCSO in two parts, invalidity and non-employment injury (NEI), on every pay line, and fills in the split for months already saved by matching each amount to the SOCSO table. Totals are unchanged. Ends with a table per month; `could_not_split` should be empty. |
 
 `sql/reset_employees.sql` is **not** part of setup. It deletes every employee record so the one-time
 workbook import can be run again before going live.
@@ -66,6 +67,12 @@ overtime & part-time hours and year-end AL buy-backs (paid in January). Click a 
 adjust an amount or leave the line out. **Save as draft** any time; **Recalculate** picks up new leave / OT
 while keeping your edits. **Finalise** locks the month. Only an admin can reopen a finalised month, with a reason
 that goes into the audit log.
+
+**Statutory figures** are shown share by share everywhere (screens, payslips, lists, Excel): EPF employee / employer,
+SOCSO employee **invalidity** / employee **NEI** (non-employment injury, from June 2026) / employer, EIS employee / employer.
+On a payroll line the employee's SOCSO has two boxes, invalidity and NEI; leave both empty to use the table. NEI is 0 for
+anyone with the NEI opt-out and for months before June 2026; staff aged 60+ pay NEI only. The EPF and SOCSO & EIS lists keep a
+"Total to pay" column for the portals. The EA form (E2) still shows employee SOCSO + EIS in one figure, as LHDN asks.
 
 Pay rules (Settings › HR policies › Payroll): daily rate = basic ÷ 26, hourly rate = daily rate ÷ normal hours
 (work hours less meal break). Normal-day OT × the person's OT multiplier (1.5), off day × 1.5, rest day ½ day / 1 day
@@ -155,6 +162,11 @@ Its fixture contains real salaries, so it is **git-ignored** and skipped automat
 2. Note the change below.
 
 ## Change log
+- **v2026.10.10-17:45** — Employee and employer shares shown separately everywhere (import preview, payroll months list, month
+  figures, company totals, line window, CSV, payslips, monthly summary, EPF and SOCSO & EIS lists, year to date, employee
+  payroll history). Employee SOCSO split into invalidity and NEI: stored per line, two boxes on the payroll line, separate
+  rows on the payslip, separate columns in every report. Imported months split by matching the workbook amount to the SOCSO
+  table. "Total to pay" kept on the EPF and SOCSO & EIS lists. Run `sql/009_socso_nei.sql`.
 - **v2026.10.09-20:00** — Phase 6: optional modules (each switchable). Automatic PCB (LHDN computerised method) with
   per-employee tax details, typed override per line and per person, editable PCB rules; MEG-FORMS SCF / MTCF claims
   paid as reimbursements; company loans with instalments; final settlement for leavers (annual leave pay-out or
