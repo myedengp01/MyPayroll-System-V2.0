@@ -26,6 +26,7 @@ const ROUTES = {
   'claims':                 { label: 'MEG-FORMS claims',       load: () => import('./modules/claims.js'), roles: ['admin', 'hr'], module: 'claims' },
   'loans':                  { label: 'Company loans',          load: () => import('./modules/loans.js'), roles: ['admin', 'hr'], module: 'loans' },
   'settlements':            { label: 'Final settlement',       load: () => import('./modules/settlements.js'), roles: ['admin', 'hr'], module: 'settlement' },
+  'payroll/companies':      { label: 'Paying companies',       load: () => import('./modules/payingco.js'), roles: ['admin', 'hr'] },
   'payroll/import':         { label: 'Import past months',     load: () => import('./modules/payimportpage.js'), roles: ['admin'] },
   'settings/companies':     { label: 'Companies',              load: () => import('./modules/companies.js') },
   'settings/org':           { label: 'Departments & job titles', load: () => import('./modules/org.js') },
@@ -41,7 +42,7 @@ const MENU = [
   { group: null, items: ['dashboard'] },
   { group: 'People', items: ['employees', 'employees/former', 'employees/ids', 'employees/import'] },
   { group: 'Time & leave', items: ['leave', 'leave/balances', 'leave/al-calculator', 'leave/year-end', 'time', 'leave/import'] },
-  { group: 'Payroll', items: ['payroll', 'reports', 'claims', 'loans', 'settlements', 'payroll/import'] },
+  { group: 'Payroll', items: ['payroll', 'reports', 'payroll/companies', 'claims', 'loans', 'settlements', 'payroll/import'] },
   { group: 'Settings', items: ['settings/companies', 'settings/org', 'settings/lists', 'settings/payment-types',
     'settings/statutory', 'settings/holidays', 'settings/policies', 'settings/users', 'settings/audit'] },
 ];

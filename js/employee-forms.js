@@ -10,6 +10,17 @@ const deptOpts = (ref, cur) => [...blank(), ...ref.departments.filter((d) => d.i
   .map((d) => [d.id, d.code === d.name ? d.code : `${d.code} · ${d.name}`])];
 const titleOpts = (ref, cur) => [...blank(), ...ref.jobTitles.filter((t) => t.is_active || t.id === cur).map((t) => [t.id, t.name])];
 const companyOpts = (ref, cur) => ref.companies.filter((c) => c.is_active || c.id === cur).map((c) => [c.id, c.name]);
+/** Department → its company is suggested as the paying company, until the company is picked by hand. */
+function suggestCompany(ref, deptF, companyF) {
+  if (!deptF || !companyF) return;
+  let manual = false;
+  companyF.input.addEventListener('change', (e) => { if (e.isTrusted) manual = true; });
+  deptF.input.addEventListener('change', () => {
+    const d = ref.department(Number(deptF.getValue())); const c = d?.company_id ? ref.company(d.company_id) : null;
+    if (manual || !c?.is_active) return;
+    companyF.input.value = String(c.id); companyF.input.dispatchEvent(new Event('change'));
+  });
+}
 const time5 = (t) => (t ? String(t).slice(0, 5) : '');
 const values = (F) => Object.fromEntries(Object.entries(F).map(([k, f]) => [k, f.getValue()]));
 const section = (title, ...kids) => h('fieldset', { class: 'form-section' }, h('legend', {}, title), h('div', { class: 'form-grid' }, kids));
@@ -36,6 +47,7 @@ export async function openAddEmployee(ctx, ref, onDone) {
     amount: field('Starting basic salary (RM)', { type: 'number', step: '0.01' }),
     pay_basis: field('Paid', { type: 'select', options: [['monthly', 'Monthly'], ['hourly', 'Per hour']], value: 'monthly' }),
   };
+  suggestCompany(ref, F.department_id, F.company_id);
   F.nric.input.addEventListener('change', () => {
     const n = normaliseNric(F.nric.input.value);
     if (n) { F.nric.input.value = n; if (!F.dob.input.value) F.dob.input.value = dobFromNric(n) || ''; }
@@ -135,6 +147,7 @@ export function editPrivate(ctx, ref, emp, priv, onDone) {
     emergency_relation: field('Relationship', { value: p.emergency_relation }),
     emergency_phone: field('Emergency phone', { value: p.emergency_phone }),
   };
+  suggestCompany(ref, F.department_id, F.company_id);
   F.nric.input.addEventListener('change', () => {
     const n = normaliseNric(F.nric.input.value);
     if (n) { F.nric.input.value = n; if (!F.dob.input.value) F.dob.input.value = dobFromNric(n) || ''; }
@@ -168,7 +181,8 @@ export function editEmployment(ctx, ref, employeeId, em, onDone, { companyForNew
     ot_multiplier: field('Normal-day OT rate (×)', { type: 'number', step: '0.1', value: e.ot_multiplier ?? ref.policies.ot_defaults?.normal_ot_multiplier ?? 1.5 }),
     notes: field('Notes', { type: 'textarea', value: e.notes, span2: true }),
   };
-  const companyF = !em ? field('Paid by', { type: 'select', options: companyOpts(ref), value: companyForNew }) : null;
+  const companyF = !em ? field('Paid by', { type: 'select', options: companyOpts(ref), value: companyForNew, hint: 'Filled in from the department; change it if needed.' }) : null;
+  if (companyF) suggestCompany(ref, F.department_id, companyF);
   openModal({ title: em ? 'Edit employment period' : 'Add employment period (rehire)', wide: true,
     body: h('div', { class: 'form-grid' }, companyF, Object.values(F)),
     actions: [{ label: em ? 'Save changes' : 'Add period', primary: true, onClick: async (close) => {

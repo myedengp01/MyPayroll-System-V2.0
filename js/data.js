@@ -32,7 +32,7 @@ export async function loadPolicy(sb, key) {
 export async function loadRef(sb) {
   const [companies, departments, jobTitles, lookups, paymentTypes, policies] = await Promise.all([
     sb.from('eppd_companies').select('id,code,name,short_name,eid_prefix,is_active,is_primary,sort_order').order('sort_order').order('id'),
-    sb.from('eppd_departments').select('id,code,name,is_active,sort_order').order('sort_order').order('code'),
+    sb.from('eppd_departments').select('id,code,name,company_id,is_active,sort_order').order('sort_order').order('code'),
     fetchAll(() => sb.from('eppd_job_titles').select('id,name,is_active,sort_order').order('name')),
     fetchAll(() => sb.from('eppd_lookups').select('category,code,label,meta,is_active,sort_order').order('sort_order').order('label')),
     sb.from('eppd_payment_types').select('id,code,name,kind,category,is_active,sort_order').order('sort_order'),

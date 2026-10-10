@@ -3,7 +3,7 @@
 Payroll app for MyEden Group, rebuilt from the MEG-EPPD 2026 workbook.
 Static site (GitHub Pages) + Supabase. No build step.
 
-**Current version:** v2026.10.10-17:45 · **Phase 6 – Automatic PCB, claims, loans, final settlement** (+ SOCSO NEI split)
+**Current version:** v2026.10.10-19:00 · **Phase 6 – Automatic PCB, claims, loans, final settlement** (+ SOCSO NEI split)
 
 ## First-time setup
 
@@ -21,6 +21,7 @@ Run these **in order**. Each file is safe to re-run.
 | `sql/007_last_working_days.sql` | One-off fix: last working day for 7 former staff whose workbook "Resigned Date" was blank. |
 | `sql/008_phase6.sql` | Phase 6: tax details (automatic PCB), MEG-FORMS claims, loans, final settlement; new payment types (ZAKAT, CLAIM_SCF, CLAIM_MTCF, NOTICE_PAY, NOTICE_SHORT, AL_ENCASH); `modules`, `pcb` and `settlement` policies. All modules start **off**. |
 | `sql/009_socso_nei.sql` | Keeps the employee's SOCSO in two parts, invalidity and non-employment injury (NEI), on every pay line, and fills in the split for months already saved by matching each amount to the SOCSO table. Totals are unchanged. Ends with a table per month; `could_not_split` should be empty. |
+| `sql/010_company_structure.sql` | Paying companies and departments per MyEden Group's structure: Myeden Group, Myeden Edu Hub, Happy Dino, Aborne Project active; centres and Myeden Holding inactive; departments named by centre and linked to their company (E8 merged into HQ, E3+ added); staff and all payroll lines (finalised months included) moved to the right company, per-company month totals rebuilt. Adds the function behind Payroll › Paying companies. Ends with a report. |
 
 `sql/reset_employees.sql` is **not** part of setup. It deletes every employee record so the one-time
 workbook import can be run again before going live.
@@ -115,7 +116,16 @@ it adding items to new payroll lines; finalised months are never changed.
   (negative days deduct leave taken in advance); notice pay in lieu or notice not served; and whether to take the
   remaining loan balance. Items appear in the leaver's last payroll month and can be edited there.
 
-### 11. After first sign-in
+### 11. Paying companies (admin + HR)
+Payroll › Paying companies lists every current staff member with department, the department's company and the company
+that pays them, with a headcount per company and warnings for anyone with no department, no paying company or an
+inactive company. **Change…** (one person) or tick several and **Move selected to company…**, choosing the payroll month the
+move starts. If the person was already paid by the old company before that month, the old record ends the month before
+and a new one starts with the same salary, allowances and statutory switches, so earlier months and their EA form keep the
+old company. Finalised months are never changed; open and save a draft month to pick up a move. A department's company is
+only a suggestion: it fills in "Paid by" for a new employee or employment period, and can be changed.
+
+### 12. After first sign-in
 Work through the checklist on the Overview page: upload the four logos, fill in employer numbers,
 paste the year's public holidays, review payment-type switches, approve users.
 
@@ -162,6 +172,12 @@ Its fixture contains real salaries, so it is **git-ignored** and skipped automat
 2. Note the change below.
 
 ## Change log
+- **v2026.10.10-19:00** — Company structure: Myeden Group, Myeden Edu Hub, Happy Dino and Aborne Project Sdn. Bhd. are the
+  paying companies; Myeden Holding and the centres (Tadika Genius Eden, PJK Eden, Tadika Happy Dino, Eden Childcare,
+  White Feather) are inactive. Departments named by centre and linked to a company (E8 → HQ, new E3+ Tadika Happy Dino).
+  Staff and 2026 payroll lines moved to the right company. New Payroll › Paying companies screen (single and bulk moves
+  from a month). New staff get the department's company filled in. Run `sql/010_company_structure.sql`, then enter
+  Myeden Edu Hub's EPF / SOCSO / LHDN E numbers in Settings › Companies.
 - **v2026.10.10-17:45** — Employee and employer shares shown separately everywhere (import preview, payroll months list, month
   figures, company totals, line window, CSV, payslips, monthly summary, EPF and SOCSO & EIS lists, year to date, employee
   payroll history). Employee SOCSO split into invalidity and NEI: stored per line, two boxes on the payroll line, separate
