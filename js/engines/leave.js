@@ -180,30 +180,56 @@ export function leaveBalances(input) {
 
 // ---------------------------------------------------------------- year-end close
 /**
- * What happens to one person's unused annual leave at the end of `year`.
- * person: { employee_id, confirmed:boolean, grade:'E'|'S'|'A'|'I'|'U'|null, balance:number }
- * choice: { buybackPct: 50|25|10|<custom>|null }   (only offered to buyback grades)
- * Returns { carry, buyback, buybackPct, forfeit, reason, adjustments:[…] }
+ * Days a person may carry into the next year: their KPI grade's cap (0 without a grade, or when not confirmed and the policy
+ * says confirmed staff only), unless management set an override for that year (days + reason, PRI-004).
+ * person: { confirmed, grade, override }
  */
+export function eligibleCarry(person, cf) {
+  if (person.override !== null && person.override !== undefined && person.override !== '') return { days: Math.max(0, Number(person.override) || 0), basis: 'override' };
+  if (cf.confirmed_only && !person.confirmed) return { days: 0, basis: 'not_confirmed' };
+  if (!person.grade) return { days: 0, basis: 'no_grade' };
+  return { days: Number(cf.grades?.[person.grade] ?? 0), basis: 'grade' };
+}
+
+/**
+ * What happens to one person's annual leave balance at 31 Dec of `year`.
+ * person: { employee_id, confirmed:boolean, grade:'E'|'S'|'A'|'I'|'U'|null, override:number|null, balance:number }
+ * choice: { buybackPct: 50|25|10|<custom>|null, approvedBy, approvedOn }   (buy-back only for eligible buy-back grades)
+ * Rules: no balance → nothing; balance ≤ eligible → carry it all; more → carry the eligible days, then buy back (approved) or forfeit
+ * the rest; a negative balance → that many days of unpaid leave in December (an AL correction brings the balance back to 0).
+ * Returns { carry, buyback, buybackPct, forfeit, upl, cap, reason, adjustments:[…] }
+ */
+/** Buy-back is offered only to eligible staff: a buy-back grade, and confirmed when the policy says so. */
+export const canBuyBack = (person, cf) => !!person.grade && (cf.buyback_grades || []).includes(person.grade) && (!cf.confirmed_only || !!person.confirmed);
+
 export function closeYearFor(person, cf, year, choice = {}) {
-  const bal = Math.max(0, r2(Number(person.balance) || 0));
-  const res = { carry: 0, buyback: 0, buybackPct: null, forfeit: 0, reason: '', adjustments: [] };
+  const raw = r2(Number(person.balance) || 0);
+  const bal = Math.max(0, raw);
+  const el = eligibleCarry(person, cf);
+  const res = { carry: 0, buyback: 0, buybackPct: null, forfeit: 0, upl: 0, cap: el.days, basis: el.basis, reason: '', adjustments: [] };
+  if (raw < 0) {
+    res.upl = r2(-raw); res.reason = `Negative balance: ${res.upl} day${res.upl === 1 ? '' : 's'} unpaid leave`;
+    res.adjustments.push({ employee_id: person.employee_id, leave_type: 'AL', year, kind: 'manual', days: res.upl,
+      effective_date: `${year}-12-31`, note: `Negative ${year} balance (${raw}) turned into ${res.upl} day(s) of unpaid leave in December` });
+    return res;
+  }
   if (bal <= 0) { res.reason = 'No unused leave'; return res; }
-  const eligible = (!cf.confirmed_only || person.confirmed) && person.grade;
-  const cap = eligible ? Number(cf.grades?.[person.grade] ?? 0) : 0;
-  res.carry = Math.min(bal, cap);
+  res.carry = Math.min(bal, el.days);
   const excess = r2(bal - res.carry);
-  const canBuy = eligible && (cf.buyback_grades || []).includes(person.grade);
-  if (excess > 0 && canBuy && choice.buybackPct) { res.buyback = excess; res.buybackPct = Number(choice.buybackPct); }
+  const canBuy = canBuyBack(person, cf);
+  const approved = !cf.buyback_needs_approval || (choice.approvedBy && choice.approvedOn);
+  if (excess > 0 && canBuy && choice.buybackPct && approved) { res.buyback = excess; res.buybackPct = Number(choice.buybackPct); }
   else res.forfeit = excess;
-  res.reason = !person.confirmed && cf.confirmed_only ? 'Not confirmed: no carry forward'
-    : !person.grade ? 'No KPI grade: no carry forward' : `Grade ${person.grade}: carry up to ${cap} day${cap === 1 ? '' : 's'}`;
+  res.reason = el.basis === 'override' ? `Override: carry up to ${el.days} day${el.days === 1 ? '' : 's'}`
+    : el.basis === 'not_confirmed' ? 'Not confirmed: no carry forward'
+    : el.basis === 'no_grade' ? 'No KPI grade: no carry forward' : `Grade ${person.grade}: carry up to ${el.days} day${el.days === 1 ? '' : 's'}`;
   const next = year + 1;
   const expires = cf.expiry ? `${next}-${cf.expiry}` : null;
   if (res.carry > 0) res.adjustments.push({ employee_id: person.employee_id, leave_type: 'AL', year: next, kind: 'carry_forward', days: res.carry,
     effective_date: `${next}-01-01`, expires_on: expires, note: `Carried from ${year} (${res.reason})` });
   if (res.buyback > 0) res.adjustments.push({ employee_id: person.employee_id, leave_type: 'AL', year, kind: 'buyback', days: res.buyback,
-    buyback_pct: res.buybackPct, effective_date: `${year}-12-31`, note: `Unused ${year} leave above the carry-forward cap, bought back at ${res.buybackPct}%` });
+    buyback_pct: res.buybackPct, effective_date: `${year}-12-31`,
+    note: `Unused ${year} leave above the carry-forward cap, bought back at ${res.buybackPct}%${choice.approvedBy ? ` · approved by ${choice.approvedBy} on ${choice.approvedOn}` : ''}` });
   if (res.forfeit > 0) res.adjustments.push({ employee_id: person.employee_id, leave_type: 'AL', year, kind: 'forfeit', days: res.forfeit,
     effective_date: `${year}-12-31`, note: `Unused ${year} leave not carried forward` });
   return res;

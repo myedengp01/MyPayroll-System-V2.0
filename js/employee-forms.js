@@ -1,5 +1,5 @@
 // MyPayroll-System-V2.0 · employee-forms.js — add / edit dialogs used by the Employees pages
-import { h, clear, openModal, field, toast, failed, confirmDialog } from './ui.js';
+import { h, clear, openModal, field, toast, failed, confirmDialog, fmtDate, money } from './ui.js';
 import { formatEmpId, isEmpIdFormat } from './engines/eid.js';
 import { normaliseNric, dobFromNric, todayIso } from './engines/employee.js';
 import { computeNotice } from './engines/notice.js';
@@ -24,6 +24,42 @@ function suggestCompany(ref, deptF, companyF) {
 const time5 = (t) => (t ? String(t).slice(0, 5) : '');
 const values = (F) => Object.fromEntries(Object.entries(F).map(([k, f]) => [k, f.getValue()]));
 const section = (title, ...kids) => h('fieldset', { class: 'form-section' }, h('legend', {}, title), h('div', { class: 'form-grid' }, kids));
+
+
+// ---------------------------------------------------------------- leaving reason + rehire eligibility (PRI-002)
+export const REHIRE = [['eligible', 'Eligible for rehire'], ['conditional', 'Eligible, with conditions'], ['not_eligible', 'Not eligible for rehire']];
+export const rehireLabel = (c) => (REHIRE.find((r) => r[0] === c) || [, null])[1];
+function leavingFields(ref, e) {
+  const F = {
+    leaving_reason: field('Reason for leaving', { type: 'select', options: lookupOpts(ref, 'leaving_reason', e.leaving_reason), value: e.leaving_reason, hint: 'Required for everyone who leaves.' }),
+    leaving_note: field('Leaving details', { type: 'textarea', value: e.leaving_note, hint: 'Required when the reason is "Other".' }),
+    rehire_eligibility: field('Rehire', { type: 'select', options: [...blank('— not assessed'), ...REHIRE], value: e.rehire_eligibility }),
+    rehire_note: field('Rehire note', { type: 'textarea', value: e.rehire_note, hint: 'Conditions, or why not eligible.' }),
+  };
+  return F;
+}
+function checkLeaving(ref, v) {
+  if (!v.resigned_date) return true;
+  if (!v.leaving_reason) { toast('Choose the reason for leaving.', 'error'); return false; }
+  const meta = (ref.lk.leaving_reason || []).find((l) => l.code === v.leaving_reason)?.meta || {};
+  if (meta.needs_note && !String(v.leaving_note || '').trim()) { toast('Give the details for "Other".', 'error'); return false; }
+  if (v.rehire_eligibility && v.rehire_eligibility !== 'eligible' && !String(v.rehire_note || '').trim()) { toast('Add a rehire note: the conditions, or why not eligible.', 'error'); return false; }
+  return true;
+}
+const nul = (x) => (x === '' || x === undefined ? null : x);
+/** HR / Admin: add or correct the leaving reason and rehire eligibility of someone who has left. */
+export function editLeaving(ctx, ref, row, onDone) {
+  const L = leavingFields(ref, row);
+  openModal({ title: `Leaving reason · ${row.full_name}`, body: h('div', { style: 'display:grid;gap:.9rem' },
+    h('p', { class: 'small muted' }, `Last working day ${row.resigned_date || '—'}.`), ...Object.values(L)),
+  actions: [{ label: 'Save', primary: true, onClick: async (close) => {
+    const v = Object.fromEntries(Object.entries(values(L)).map(([k, x]) => [k, nul(x)]));
+    if (!checkLeaving(ref, { ...v, resigned_date: row.resigned_date || 'x' })) return false;
+    const { error } = await ctx.sb.from('eppd_employments').update(v).eq('id', row.employment_id);
+    if (failed(error)) return false;
+    toast('Leaving reason saved.'); close(); onDone?.(); return true;
+  } }] });
+}
 
 // ---------------------------------------------------------------- add employee
 export async function openAddEmployee(ctx, ref, onDone) {
@@ -163,8 +199,24 @@ export function editPrivate(ctx, ref, emp, priv, onDone) {
 }
 
 // ---------------------------------------------------------------- employment period
-export function editEmployment(ctx, ref, employeeId, em, onDone, { companyForNew } = {}) {
+export function editEmployment(ctx, ref, employeeId, em, onDone, { companyForNew, previous = [] } = {}) {
   const e = em || {};
+  // rehire: a reminder of the earlier periods, and a block on "not eligible" unless an admin overrides it (PRI-002)
+  const blocked = !em && previous.some((p) => p.rehire_eligibility === 'not_eligible');
+  const isAdmin = ctx.can(['admin']);
+  const overrideF = blocked && isAdmin ? field('Override reason (admin)', { type: 'textarea', span2: true, required: true, hint: 'Why this person is rehired although marked not eligible. Saved in the period notes and the audit log.' }) : null;
+  const reminder = !em && previous.length ? h('div', { class: `rehire-box span-2 ${blocked ? 'bad' : ''}` },
+    h('h3', {}, `Previous employment (${previous.length})`),
+    h('table', { class: 'data compact' }, h('thead', {}, h('tr', {}, ['Joined', 'Last day', 'Position', 'Centre', 'Paid by', 'Last salary', 'Reason for leaving', 'Rehire'].map((t) => h('th', {}, t)))),
+      h('tbody', {}, previous.map((p) => h('tr', {},
+        h('td', { class: 'nowrap' }, fmtDate(p.join_date) || '—'),
+        h('td', { class: 'nowrap' }, p.resigned_date ? fmtDate(p.resigned_date) : 'still employed', p.short_notice ? h('div', { class: 'tag warn' }, 'Left before notice ended') : null),
+        h('td', {}, p.position || '—'), h('td', {}, p.centre || '—'), h('td', {}, p.company || '—'),
+        h('td', { class: 'num' }, p.last_salary != null ? money(p.last_salary) : '—'),
+        h('td', {}, p.leaving_reason ? ref.label('leaving_reason', p.leaving_reason) : h('span', { class: 'tag warn' }, 'Not recorded'), p.leaving_note ? h('div', { class: 'small muted' }, p.leaving_note) : null),
+        h('td', {}, p.rehire_eligibility ? rehireLabel(p.rehire_eligibility) : '—', p.rehire_note ? h('div', { class: 'small muted' }, p.rehire_note) : null))))),
+    blocked ? h('p', { class: 'small' }, isAdmin ? 'Marked not eligible for rehire: give an override reason below to continue.' : 'Marked not eligible for rehire. Only an admin can add a new period, with an override reason.') : null,
+    h('p', { class: 'small muted' }, 'The Employee ID stays the same; the new period starts its own service, leave and notice.')) : null;
   const F = {
     join_date: field('Date joined', { type: 'date', value: e.join_date, required: true }),
     confirmation_status: field('Employment status', { type: 'select', options: lookupOpts(ref, 'confirmation_status', e.confirmation_status), value: e.confirmation_status || 'UP' }),
@@ -181,15 +233,26 @@ export function editEmployment(ctx, ref, employeeId, em, onDone, { companyForNew
     ot_multiplier: field('Normal-day OT rate (×)', { type: 'number', step: '0.1', value: e.ot_multiplier ?? ref.policies.ot_defaults?.normal_ot_multiplier ?? 1.5 }),
     notes: field('Notes', { type: 'textarea', value: e.notes, span2: true }),
   };
+  const L = leavingFields(ref, e);
+  const leaveBox = h('fieldset', { class: 'form-section span-2' }, h('legend', {}, 'Leaving'), h('div', { class: 'form-grid' }, Object.values(L)));
+  const showLeave = () => { leaveBox.hidden = !F.resigned_date.getValue(); };
+  F.resigned_date.input.addEventListener('input', showLeave); F.resigned_date.input.addEventListener('change', showLeave); showLeave();
   const companyF = !em ? field('Paid by', { type: 'select', options: companyOpts(ref), value: companyForNew, hint: 'Filled in from the department; change it if needed.' }) : null;
   if (companyF) suggestCompany(ref, F.department_id, companyF);
   openModal({ title: em ? 'Edit employment period' : 'Add employment period (rehire)', wide: true,
-    body: h('div', { class: 'form-grid' }, companyF, Object.values(F)),
+    body: h('div', { class: 'form-grid' }, reminder, overrideF, companyF, Object.values(F), leaveBox),
     actions: [{ label: em ? 'Save changes' : 'Add period', primary: true, onClick: async (close) => {
       const v = values(F); if (!v.join_date) { toast('Date joined is required.', 'error'); return false; }
       const leftStatus = ref.confMeta?.[v.confirmation_status]?.is_active_employment === false;
       if (leftStatus && !v.resigned_date) { toast(`Enter the last working day: the status "${ref.label('confirmation_status', v.confirmation_status)}" means they no longer work here.`, 'error', 6000); return false; }
       if (v.resigned_date && v.resigned_date < v.join_date) { toast('The last working day cannot be before the date joined.', 'error'); return false; }
+      Object.assign(v, Object.fromEntries(Object.entries(values(L)).map(([k, x]) => [k, v.resigned_date ? nul(x) : null])));
+      if (!checkLeaving(ref, v)) return false;
+      if (blocked) {
+        if (!isAdmin) { toast('Marked not eligible for rehire: only an admin can add a new period.', 'error', 6000); return false; }
+        const why = overrideF.getValue(); if (!why) { toast('Give the override reason.', 'error'); return false; }
+        v.notes = [`Rehire override (not eligible): ${why}`, v.notes].filter(Boolean).join('\n');
+      }
       if (em) {
         const { error } = await ctx.sb.from('eppd_employments').update(v).eq('id', em.id);
         if (failed(error)) return false;
@@ -219,6 +282,7 @@ export function recordResignation(ctx, ref, em, onDone) {
     status: field('Set status to', { type: 'select', options: lookupOpts(ref, 'confirmation_status', em.confirmation_status), value: em.confirmation_status,
       hint: 'Keep the current status while serving notice; change to Resigned after the last day if you prefer.' }),
   };
+  const L = leavingFields(ref, em);
   const out = h('p', { class: 'notice-calc' });
   const calc = () => {
     const r = policy ? computeNotice({ joinDate: em.join_date, letterDate: F.letter.getValue(), onProbation: em.confirmation_status === 'UP' }, policy) : null;
@@ -232,12 +296,14 @@ export function recordResignation(ctx, ref, em, onDone) {
   F.notice.input.addEventListener('input', () => { F.notice.input.dataset.touched = '1'; if (!F.last.input.dataset.touched) F.last.input.value = F.notice.input.value; });
   F.last.input.addEventListener('input', () => { F.last.input.dataset.touched = '1'; });
   F.letter.input.addEventListener('change', calc);
-  openModal({ title: 'Record resignation', body: h('div', { style: 'display:grid;gap:.9rem' }, F.letter, out, F.notice, F.last, F.status),
+  openModal({ title: 'Record resignation', body: h('div', { style: 'display:grid;gap:.9rem' }, F.letter, out, F.notice, F.last, F.status, ...Object.values(L)),
     actions: [{ label: 'Save resignation', primary: true, onClick: async (close) => {
       const r = calc();
       const notice = F.notice.getValue() || r?.noticeEnd || null;
       const patch = { resignation_letter_date: F.letter.getValue(), notice_until: notice, resigned_date: F.last.getValue() || notice, confirmation_status: F.status.getValue() || em.confirmation_status };
       if (!patch.resignation_letter_date) { toast('Letter date is required.', 'error'); return false; }
+      Object.assign(patch, Object.fromEntries(Object.entries(values(L)).map(([k, x]) => [k, nul(x)])));
+      if (!checkLeaving(ref, patch)) return false;
       const { error } = await ctx.sb.from('eppd_employments').update(patch).eq('id', em.id);
       if (failed(error)) return false;
       await ctx.sb.from('eppd_assignments').update({ end_date: patch.resigned_date }).eq('employment_id', em.id).is('end_date', null);
@@ -295,23 +361,24 @@ export function editSalary(ctx, assignmentId, row, onDone) {
 // ---------------------------------------------------------------- recurring allowance
 export function editAllowance(ctx, ref, assignmentId, row, onDone, { joinDate } = {}) {
   const r = row || {};
-  const types = ref.paymentTypes.filter((t) => t.kind === 'earning' && (t.is_active || t.id === r.payment_type_id) && t.category !== 'basic' && t.category !== 'overtime');
+  const types = ref.paymentTypes.filter((t) => (t.is_active || t.id === r.payment_type_id) && t.code !== 'UNPAID_LEAVE'
+    && (t.kind === 'earning' ? t.category !== 'basic' && t.category !== 'overtime' : t.category === 'personal'));
   const F = {
-    payment_type_id: field('Allowance', { type: 'select', options: types.map((t) => [t.id, t.name]), value: r.payment_type_id, required: true }),
+    payment_type_id: field('Item', { type: 'select', options: types.map((t) => [t.id, `${t.name}${t.kind === 'deduction' ? ' (deduction)' : ''}`]), value: r.payment_type_id, required: true }),
     amount: field('Amount per month (RM)', { type: 'number', step: '0.01', value: r.amount, required: true }),
     start_date: field('From', { type: 'date', value: r.start_date || joinDate || todayIso() }),
     end_date: field('Until', { type: 'date', value: r.end_date, hint: 'Paid for every month up to and including this date. Blank = ongoing.' }),
     note: field('Note', { type: 'textarea', value: r.note, span2: true }),
   };
-  openModal({ title: row ? 'Edit allowance' : 'Add allowance', body: h('div', { class: 'form-grid' }, Object.values(F)),
-    actions: [{ label: row ? 'Save changes' : 'Add allowance', primary: true, onClick: async (close) => {
+  openModal({ title: row ? 'Edit recurring item' : 'Add recurring item', body: h('div', { class: 'form-grid' }, Object.values(F)),
+    actions: [{ label: row ? 'Save changes' : 'Add item', primary: true, onClick: async (close) => {
       const v = values(F); v.payment_type_id = Number(v.payment_type_id);
-      if (!v.payment_type_id || v.amount === null) { toast('Allowance and amount are required.', 'error'); return false; }
+      if (!v.payment_type_id || v.amount === null) { toast('Item and amount are required.', 'error'); return false; }
       if (v.start_date && v.end_date && v.end_date < v.start_date) { toast('“Until” must be on or after “From”.', 'error'); return false; }
       const q = row ? ctx.sb.from('eppd_allowances').update(v).eq('id', row.id)
                     : ctx.sb.from('eppd_allowances').insert({ ...v, assignment_id: assignmentId });
       const { error } = await q; if (failed(error)) return false;
-      toast('Allowance saved.'); close(); onDone?.(); return true;
+      toast('Recurring item saved.'); close(); onDone?.(); return true;
     } }] });
 }
 

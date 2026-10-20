@@ -23,6 +23,10 @@ Run these **in order**. Each file is safe to re-run.
 | `sql/009_socso_nei.sql` | Keeps the employee's SOCSO in two parts, invalidity and non-employment injury (NEI), on every pay line, and fills in the split for months already saved by matching each amount to the SOCSO table. Totals are unchanged. Ends with a table per month; `could_not_split` should be empty. |
 | `sql/010_company_structure.sql` | Paying companies and departments per MyEden Group's structure: Myeden Group, Myeden Edu Hub, Happy Dino, Aborne Project active; centres and Myeden Holding inactive; departments named by centre and linked to their company (E8 merged into HQ, E3+ added); staff and all payroll lines (finalised months included) moved to the right company, per-company month totals rebuilt. Adds the function behind Payroll › Paying companies. Ends with a report. |
 
+| `sql/011_main_by_period_notice.sql` | Main paying company per period; agreed notice-period date. |
+| `sql/012_leaving_kpi_items.sql` | Reason for leaving (required for every leaver) and rehire eligibility; leaving-reason pick-list; statutory treatment presets on payment types; KPI grade who/when and carry-forward override; KPI cut-off month (October) and buy-back approval in the carry-forward policy. |
+| `sql/013_employee_list_leaving.sql` | Employee list shows the leaving reason and rehire eligibility. |
+
 `sql/reset_employees.sql` is **not** part of setup. It deletes every employee record so the one-time
 workbook import can be run again before going live.
 
@@ -172,6 +176,20 @@ Its fixture contains real salaries, so it is **git-ignored** and skipped automat
 2. Note the change below.
 
 ## Change log
+- **v2026.10.20-10:50** — Leaving reasons and rehire (PRI-002): a reason is required whenever a last working day is set
+  ("Other" needs details); rehire eligibility with a note; Former staff shows reason and rehire with an "Add reason" action
+  and a "no leaving reason" count; "Add employment period (rehire)" shows every earlier period (dates, position, centre,
+  company, last salary, reason, eligibility, short notice) and keeps the Employee ID; "Not eligible" needs an admin override
+  reason. Items from the payroll line (PRI-003): add an item for this month only or as a recurring item with an optional
+  end date; list, edit, end from a month or delete the person's recurring items; new item types with statutory presets
+  (wages, travel, incentive, bonus, gift, leave pay, overtime, compensation, claim, unpaid leave, personal) and remarks;
+  a tick that differs from the preset needs a reason; system items can be renamed but not deleted; a type used in a
+  finalised month is switched off instead of deleted. KPI carry forward (PRI-004): KPI grades page with note, who / when
+  and a carry-forward override (days + reason); KPI cut-off month (default October) and confirmed-only switch in HR
+  policies; Leave balances shows grade, eligible days and what will carry; carry from last year is shown provisionally
+  until last year is closed; Year-end close carries the 31 Dec balance by grade or override, buy-back for eligible staff
+  only with approver and date, the rest forfeited, and a negative balance becomes unpaid leave in December's payroll.
+  Run `sql/012_leaving_kpi_items.sql` and `sql/013_employee_list_leaving.sql` (already applied on the CMS database).
 - **v2026.10.10-19:00** — Company structure: Myeden Group, Myeden Edu Hub, Happy Dino and Aborne Project Sdn. Bhd. are the
   paying companies; Myeden Holding and the centres (Tadika Genius Eden, PJK Eden, Tadika Happy Dino, Eden Childcare,
   White Feather) are inactive. Departments named by centre and linked to a company (E8 → HQ, new E3+ Tadika Happy Dino).

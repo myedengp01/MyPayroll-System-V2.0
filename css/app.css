@@ -487,3 +487,21 @@ dl.kv-grid dd { margin: 0; font-weight: 600; }
 .leave-slip th.num.wrap { white-space: normal; }
 .leave-slip { table-layout: fixed; }
 .leave-slip th:first-child, .leave-slip td:first-child { width: 40%; white-space: normal; }
+/* rehire reminder (PRI-002) */
+.rehire-box { border: 1px solid var(--line); border-radius: 10px; padding: .8rem 1rem; background: var(--surface-2, transparent); margin-bottom: .4rem; }
+.rehire-box.bad { border-color: var(--danger); }
+.rehire-box h3 { margin: 0 0 .5rem; font-size: .95rem; }
+.rehire-box table { width: 100%; font-size: .82rem; }
+/* payroll line: add item / recurring items (PRI-003) */
+.add-item { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin: .6rem 0 .6rem; }
+.add-item .check-row { display: inline-flex; align-items: center; gap: .35rem; margin: 0; }
+.recur-box { margin: 0 0 1rem; border: 1px solid var(--line); border-radius: 10px; padding: .5rem .8rem; }
+.recur-box summary { cursor: pointer; font-weight: 600; font-size: .9rem; }
+.recur-box table { width: 100%; margin-top: .5rem; font-size: .85rem; }
+.treat-remark { margin: -.2rem 0 .2rem; font-size: .82rem; color: var(--muted); background: var(--accent-soft); padding: .5rem .7rem; border-radius: 8px; }
+.add-item select, .add-item input { width: auto; max-width: 100%; }
+.add-item select:first-of-type { max-width: 18rem; }
+.add-item input[type=number] { width: 8rem; }
+.add-item input[type=text] { flex: 1 1 10rem; min-width: 8rem; }
+.rehire-box td { vertical-align: top; }
+.rehire-box th { white-space: nowrap; }

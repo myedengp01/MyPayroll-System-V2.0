@@ -1,7 +1,9 @@
 // Monthly payroll: list of months, and the pay run for one month (prepare → finalise)
 import { h, clear, pageHead, toast, failed, confirmDialog, openModal, field, money, fmtDateTime, switchToggle } from '../ui.js';
 import { fetchAll } from '../data.js';
-import { loadPayMonth, loadPayInputs } from '../pay-data.js';
+import { loadPayMonth, loadPayInputs, loadPayPeople } from '../pay-data.js';
+import { editPayType } from '../paytype-form.js';
+import { editAllowance, deleteRow } from '../employee-forms.js';
 import { loadPeople, loadLeaveYear, loadHolidaySet, LEAVE_LABELS } from '../leave-data.js';
 import { editTimeEntry, pullOtcf } from '../time-forms.js';
 import { savePtTotal } from '../pt-hours.js';
@@ -65,6 +67,12 @@ async function renderRun(el, ctx, param) {
       if (before !== after || run.lines.length !== lines.length) { dirty = true; refreshed = true; }
     }
   }
+  // December: negative annual leave balances become unpaid leave at the year-end close (PRI-004), so close the year first
+  let yearOpen = false;
+  if (!locked && D.period.slice(5, 7) === '12') {
+    const { data: yc } = await ctx.sb.from('eppd_leave_year_closes').select('year').eq('year', Number(D.period.slice(0, 4))).maybeSingle();
+    yearOpen = !yc;
+  }
   const companyName = (id) => D.companies.get(Number(id))?.short_name || D.companies.get(Number(id))?.name || (id ? `Company ${id}` : 'No company');
 
   const head = h('div', {}); const notice = h('div', {}); const facts = h('div', { class: 'facts' }); const compBox = h('section', { class: 'panel' });
@@ -92,9 +100,10 @@ async function renderRun(el, ctx, param) {
     clear(head).append(h('p', { class: 'crumbs' }, h('a', { href: '#/payroll' }, 'Monthly payroll'), ` / ${monthLabel(D.period)}`),
       pageHead(`Payroll · ${monthLabel(D.period)}`, locked
         ? `Finalised${run.finalised_at ? ` on ${fmtDateTime(run.finalised_at)}` : ''}. This month is locked${isAdmin ? '; an admin can reopen it with a reason' : ''}.`
-        : 'Figures come from salary history, allowances, unpaid leave and overtime & hours. Click a line to add one-off items (bonus, commission, MVC…), type PCB or adjust an amount.',
+        : 'Figures come from salary history, recurring items, unpaid leave and overtime & hours. Click a line to add items (this month only or recurring), type PCB or adjust an amount.',
       statusTag(run), ...actions));
     const n = [];
+    if (yearOpen) n.push(h('p', { class: 'setup-warning', style: 'margin-bottom:1rem' }, `The ${D.period.slice(0, 4)} leave year is not closed yet. Close it at `, h('a', { href: `#/leave/year-end?year=${D.period.slice(0, 4)}` }, 'Year-end close'), ' before finalising December: negative annual leave balances become unpaid leave in this payroll, then click Recalculate.'));
     if (refreshed) n.push(h('p', { class: 'setup-warning', style: 'margin-bottom:1rem' }, 'Figures were refreshed from the latest salary, leave and overtime records since this draft was saved. Save to keep them.'));
     if (run?.reopen_reason && !locked) n.push(h('p', { class: 'setup-warning', style: 'margin-bottom:1rem' }, `Reopened by an admin: ${run.reopen_reason}`));
     for (const t of locked ? [] : notices) n.push(h('p', { class: 'setup-warning', style: 'margin-bottom:1rem' }, t));
@@ -249,7 +258,7 @@ async function renderRun(el, ctx, param) {
             } }, 'Record leave (unpaid, annual, sick…)'),
             h('a', { class: 'btn sm ghost', href: `#/leave/audit?month=${month}`, target: '_blank', rel: 'noopener' }, 'Leave by month'))),
           h('div', { class: 'block' }, h('h4', {}, 'Salary & allowances'),
-            h('p', { class: 'small muted', style: 'margin:0 0 .4rem' }, 'Changes to salary, allowances or statutory switches are made on the employee page.'),
+            h('p', { class: 'small muted', style: 'margin:0 0 .4rem' }, 'Salary changes are made on the employee page. Recurring items (allowances, loans…) can be added, ended or edited below.'),
             h('div', { class: 'btn-row' }, h('a', { class: 'btn sm', href: `#/employees/${L.employee_id}?tab=pay`, target: '_blank', rel: 'noopener' }, 'Open employee (new tab)')))),
         h('p', { class: 'small muted', style: 'margin:.5rem 0 0' }, 'Saving any of these recalculates this line straight away. Then click Apply, and Save draft when you are done.'));
     };
@@ -269,6 +278,23 @@ async function renderRun(el, ctx, param) {
       delete L.overrides.socso_ee;
     }
     const box = h('div', {});
+    const holder = h('div', {});
+    let lastType = null;
+    const key = (x) => `${x.employee_id}|${x.company_id || 0}`;
+    const k0 = key(L);
+    /** Inputs or recurring items changed: reload them, rebuild the month and show this line again. */
+    async function refreshLine({ people = false } = {}) {
+      const i = lines.findIndex((x) => key(x) === k0);
+      if (i >= 0) lines[i] = recomputeLine(L, D);
+      Object.assign(D, await loadPayInputs(ctx.sb, D.period, D.period));
+      if (people) D.people = await loadPayPeople(ctx.sb, D.ref);
+      const res = buildRun({ ...D, existing: lines });
+      lines = res.lines; notices = res.notices || []; dirty = true;
+      const fresh = lines.find((x) => key(x) === k0);
+      if (fresh) { orig = fresh; L = JSON.parse(JSON.stringify(fresh)); }
+      draw(); drawAll(); holder.firstChild?.reload?.();
+      toast(`${L.emp_name}: line recalculated.`);
+    }
     // edits arrive on 'change' (fired on blur); redraw on the next tick so the field being left is not removed mid-event
     let pending = false;
     const redraw = () => { if (pending) return; pending = true; setTimeout(() => { pending = false; draw(); }, 0); };
@@ -295,18 +321,66 @@ async function renderRun(el, ctx, param) {
       const section = (title, list, sign) => list.length ? [h('tr', { class: 'sub-row' }, h('th', { colspan: 4 }, title)), ...list.map(itemRow),
         h('tr', {}, h('td', { colspan: 2, class: 'muted' }, `Total ${title.toLowerCase()}`), h('td', { class: 'num strong' }, `${sign}${money(list.reduce((s, i) => s + itemAmount(i), 0))}`), h('td', {}))] : [];
 
-      // add item
-      let addRow = null;
+      // add item: this month only, or recurring (saved on the employee, optional end date) — PRI-003
+      let addRow = null, recurBox = null;
       if (!ro && L.mode !== 'fixed') {
-        const typeSel = h('select', { 'aria-label': 'Payment type' }, D.typeList.filter((t) => t.is_active && t.code !== 'BASIC').map((t) => h('option', { value: t.code }, `${t.name}${t.kind === 'deduction' ? ' (deduction)' : ''}`)));
+        const canRecur = (t) => t && t.code !== 'UNPAID_LEAVE' && (t.kind === 'earning' ? t.category !== 'basic' && t.category !== 'overtime' : t.category === 'personal');
+        const typeSel = h('select', { 'aria-label': 'Payment type' }, D.typeList.filter((t) => t.is_active && t.code !== 'BASIC').map((t) => h('option', { value: t.code, selected: t.code === lastType }, `${t.name}${t.kind === 'deduction' ? ' (deduction)' : ''}`)));
         const amt = h('input', { type: 'number', step: '0.01', placeholder: 'Amount', 'aria-label': 'Amount', style: 'width:8rem' });
         const note = h('input', { type: 'text', placeholder: 'Note (optional)', 'aria-label': 'Note' });
+        const mode = h('select', { 'aria-label': 'How often' }, h('option', { value: 'once' }, 'This month only'), h('option', { value: 'recur' }, 'Recurring (every month)'));
+        const endsChk = h('input', { type: 'checkbox', 'aria-label': 'Ends on a date' });
+        const endsOn = h('input', { type: 'date', 'aria-label': 'Ends on', value: lastDayOfMonth(D.period), min: D.period, disabled: true });
+        const endsWrap = h('label', { class: 'check-row small', hidden: true }, endsChk, 'Ends on', endsOn);
+        endsChk.addEventListener('change', () => { endsOn.disabled = !endsChk.checked; });
+        const syncMode = () => { const t = D.types.get(typeSel.value); if (!canRecur(t) && mode.value === 'recur') mode.value = 'once'; mode.options[1].disabled = !canRecur(t) || !L.assignment_id; endsWrap.hidden = mode.value !== 'recur'; };
+        mode.addEventListener('change', syncMode); typeSel.addEventListener('change', () => { lastType = typeSel.value; syncMode(); }); syncMode();
         const add = h('button', { class: 'btn sm', type: 'button' }, 'Add');
-        add.addEventListener('click', () => {
+        add.addEventListener('click', async () => {
           const v = Number(amt.value); if (!(v > 0)) { toast('Enter an amount above 0.', 'error'); return; }
-          L.items.push(itemFromType(D.types.get(typeSel.value), { auto: false, amount: v, note: note.value.trim() || null })); draw();
+          const t = D.types.get(typeSel.value);
+          if (mode.value === 'once') { L.items.push(itemFromType(t, { auto: false, amount: v, note: note.value.trim() || null })); draw(); return; }
+          const end = endsChk.checked ? endsOn.value : null;
+          if (endsChk.checked && (!end || end < D.period)) { toast('“Ends on” must be in or after this month.', 'error'); return; }
+          add.disabled = true;
+          const { error } = await ctx.sb.from('eppd_allowances').insert({ assignment_id: L.assignment_id, payment_type_id: t.id, amount: v, start_date: D.period, end_date: end, note: note.value.trim() || null });
+          add.disabled = false;
+          if (failed(error)) return;
+          toast(`${t.name}: RM${money(v)} a month from ${monthLabel(D.period)}${end ? ` until ${end}` : ''}.`);
+          await refreshLine({ people: true });
         });
-        addRow = h('div', { class: 'filter-row', style: 'justify-content:flex-start;gap:.5rem;margin:.6rem 0 1rem;flex-wrap:wrap' }, h('b', { class: 'small' }, 'Add a one-off item:'), typeSel, amt, note, add);
+        const newType = ctx.can(['admin']) ? h('button', { class: 'btn sm ghost', type: 'button', onclick: () => editPayType(ctx, null, D.typeList, (t) => {
+          D.typeList.push(t); D.types.set(t.code, t); D.typesById?.set?.(t.id, t); D.ref.paymentTypes.push(t); lastType = t.code; draw();
+        }) }, 'New item type') : null;
+        addRow = h('div', { class: 'add-item' }, h('b', { class: 'small' }, 'Add item:'), typeSel, amt, mode, endsWrap, note, add, newType);
+        // the person's recurring items (allowances, loans…) on this paying company
+        const asg = (D.people.find((p) => p.id === L.employee_id)?.employments || []).flatMap((e) => e.assignments).find((a) => a.id === L.assignment_id);
+        const rec = (asg?.allowances || []).slice().sort((a, b) => String(b.start_date || '').localeCompare(String(a.start_date || '')));
+        const typeById = (id) => D.typeList.find((t) => t.id === id);
+        const status = (a) => (a.end_date && a.end_date < D.period ? ['', 'ended'] : a.start_date && a.start_date > lastDayOfMonth(D.period) ? ['info', 'starts later'] : ['ok', 'this month']);
+        const endFrom = (a) => {
+          const m = field('Last month paid', { type: 'month', value: D.period.slice(0, 7), hint: 'Paid up to and including this month, then it stops.' });
+          openModal({ title: `End ${typeById(a.payment_type_id)?.name || 'item'}`, body: h('div', {}, m), actions: [{ label: 'End it', primary: true, onClick: async (close) => {
+            const ym2 = m.getValue(); if (!ym2) { toast('Choose the month.', 'error'); return false; }
+            const endD = lastDayOfMonth(`${ym2}-01`);
+            if (a.start_date && endD < a.start_date) { toast('That is before it starts. Delete it instead.', 'error'); return false; }
+            const { error } = await ctx.sb.from('eppd_allowances').update({ end_date: endD }).eq('id', a.id);
+            if (failed(error)) return false; toast('Recurring item ended.'); close(); await refreshLine({ people: true }); return true;
+          } }] });
+        };
+        recurBox = asg ? h('details', { class: 'recur-box', open: rec.length > 0 && rec.length <= 6 },
+          h('summary', {}, `Recurring items on this company (${rec.length})`),
+          rec.length ? h('table', { class: 'data compact' }, h('thead', {}, h('tr', {}, ['Item', 'Per month', 'From', 'Until', '', ''].map((x) => h('th', {}, x)))),
+            h('tbody', {}, rec.map((a) => { const [cls, txt] = status(a); return h('tr', {},
+              h('td', {}, typeById(a.payment_type_id)?.name || '—', a.note ? h('div', { class: 'small muted' }, a.note) : null),
+              h('td', { class: 'num' }, money(a.amount)), h('td', { class: 'nowrap' }, a.start_date || '—'), h('td', { class: 'nowrap' }, a.end_date || 'ongoing'),
+              h('td', {}, h('span', { class: `tag ${cls}` }, txt)),
+              h('td', { class: 'actions nowrap' },
+                h('button', { class: 'btn sm', type: 'button', onclick: () => editAllowance(ctx, D.ref, L.assignment_id, a, () => refreshLine({ people: true })) }, 'Edit'),
+                !a.end_date || a.end_date >= D.period ? h('button', { class: 'btn sm', type: 'button', onclick: () => endFrom(a) }, 'End from…') : null,
+                h('button', { class: 'btn sm ghost', type: 'button', onclick: () => deleteRow(ctx, 'eppd_allowances', a.id, typeById(a.payment_type_id)?.name || 'item', () => refreshLine({ people: true })) }, 'Delete'))); })))
+            : h('p', { class: 'small muted' }, 'None. Choose “Recurring” above to add one (e.g. an allowance for a fixed period).'),
+          h('p', { class: 'small muted' }, 'Ending or deleting a recurring item never changes finalised months; their payslips keep what was paid.')) : null;
       }
 
       // statutory
@@ -357,7 +431,7 @@ async function renderRun(el, ctx, param) {
         h('div', { class: 'table-wrap' }, h('table', { class: 'data' },
           h('thead', {}, h('tr', {}, h('th', {}, 'Item'), h('th', {}, 'Details'), h('th', { class: 'num' }, 'Amount (RM)'), h('th', {}))),
           h('tbody', {}, ...section('Earnings', g.earnings, ''), ...section('Deductions before statutory', g.deductions, '−'), ...section('Personal deductions', g.personal, '−'), ...section('Claims paid with the salary', g.claims || [], '+')))),
-        addRow,
+        addRow, recurBox,
         h('div', { class: 'grid-2 line-split', style: 'margin-top:1rem;gap:1.2rem;align-items:start' },
           h('div', { style: 'min-width:0' }, h('h3', { style: 'margin-bottom:.4rem' }, 'Statutory'),
             h('div', { class: 'table-wrap' }, h('table', { class: 'data' }, h('thead', {}, h('tr', {}, h('th', {}, ''), h('th', { class: 'num' }, 'Wage'), h('th', { class: 'num' }, 'Employee'), h('th', { class: 'num' }, 'Employer'))), h('tbody', {}, statRows))),
@@ -377,22 +451,7 @@ async function renderRun(el, ctx, param) {
     };
     draw();
     // inputs: change overtime, part-time hours or leave without leaving the payroll page; the line recalculates on save
-    const holder = h('div', {});
-    if (!ro && L.mode !== 'fixed') {
-      const key = (x) => `${x.employee_id}|${x.company_id || 0}`;
-      const k0 = key(L);
-      inputsPanel(L, async () => {
-        const i = lines.findIndex((x) => key(x) === k0);
-        if (i >= 0) lines[i] = recomputeLine(L, D);
-        Object.assign(D, await loadPayInputs(ctx.sb, D.period, D.period));
-        const res = buildRun({ ...D, existing: lines });
-        lines = res.lines; notices = res.notices || []; dirty = true;
-        const fresh = lines.find((x) => key(x) === k0);
-        if (fresh) { orig = fresh; L = JSON.parse(JSON.stringify(fresh)); }
-        draw(); drawAll(); holder.firstChild?.reload?.();
-        toast(`${L.emp_name}: line recalculated.`);
-      }).then((panel) => holder.append(panel));
-    }
+    if (!ro && L.mode !== 'fixed') inputsPanel(L, () => refreshLine()).then((panel) => holder.append(panel));
     openModal({ title: `${L.emp_name} · ${monthLabel(D.period)}`, body: h('div', {}, holder, box), wide: true,
       actions: ro ? [] : [{ label: 'Apply', primary: true, onClick: async (close) => {
         await new Promise((r) => setTimeout(r, 0));

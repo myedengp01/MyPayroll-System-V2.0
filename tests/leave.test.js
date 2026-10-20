@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { edate, countedMonths, alEntitlement, countLeaveDays, slEntitlement, proRate, leaveBalances, closeYearFor, halfUp } from '../js/engines/leave.js';
+import { edate, countedMonths, alEntitlement, countLeaveDays, slEntitlement, proRate, leaveBalances, closeYearFor, eligibleCarry, halfUp } from '../js/engines/leave.js';
 import { classifyOtcfLine, otcfToEntries, normalHours, otcfDate, normaliseName } from '../js/engines/ot.js';
 
 const BANDS = [{ until_months: 24, days: 8 }, { until_months: 60, days: 12 }, { until_months: null, days: 16 }];
@@ -78,6 +78,32 @@ test('year-end close by KPI grade (confirmed staff only)', () => {
   assert.deepEqual([p.carry, p.buyback, p.forfeit], [0, 0, 5]);          // probation: nothing carried
   const x = closeYearFor({ employee_id: 5, confirmed: true, grade: 'S', balance: 2 }, { ...CF, expiry: '06-30' }, 2026);
   assert.equal(x.adjustments[0].expires_on, '2027-06-30');
+});
+
+test('year-end close: KPI carry forward rules (PRI-004)', () => {
+  const ap = { ...CF, buyback_needs_approval: true };
+  // within the cap: the whole balance carries
+  assert.deepEqual(['carry', 'forfeit'].map((k) => closeYearFor({ employee_id: 1, confirmed: true, grade: 'E', balance: 4.5 }, ap, 2026)[k]), [4.5, 0]);
+  // no balance: nothing
+  assert.equal(closeYearFor({ employee_id: 1, confirmed: true, grade: 'E', balance: 0 }, ap, 2026).adjustments.length, 0);
+  // no KPI grade: 0 carried
+  const ng = closeYearFor({ employee_id: 1, confirmed: true, grade: null, balance: 5 }, ap, 2026);
+  assert.deepEqual([ng.carry, ng.forfeit, ng.basis], [0, 5, 'no_grade']);
+  // buy-back needs an approver and a date
+  const na = closeYearFor({ employee_id: 1, confirmed: true, grade: 'S', balance: 8 }, ap, 2026, { buybackPct: 25 });
+  assert.deepEqual([na.carry, na.buyback, na.forfeit], [3, 0, 5]);
+  const ok = closeYearFor({ employee_id: 1, confirmed: true, grade: 'S', balance: 8 }, ap, 2026, { buybackPct: 25, approvedBy: 'GM', approvedOn: '2026-12-20' });
+  assert.deepEqual([ok.carry, ok.buyback, ok.buybackPct, ok.forfeit], [3, 5, 25, 0]);
+  assert.match(ok.adjustments.find((a) => a.kind === 'buyback').note, /approved by GM on 2026-12-20/);
+  // override replaces the grade cap
+  assert.deepEqual(eligibleCarry({ confirmed: true, grade: 'A', override: 4 }, ap), { days: 4, basis: 'override' });
+  assert.equal(closeYearFor({ employee_id: 1, confirmed: true, grade: 'A', override: 4, balance: 10 }, ap, 2026).carry, 4);
+  // negative balance: unpaid leave, AL brought back to 0
+  const neg = closeYearFor({ employee_id: 1, confirmed: true, grade: 'E', balance: -2.5 }, ap, 2026);
+  assert.deepEqual([neg.carry, neg.upl], [0, 2.5]);
+  assert.deepEqual(neg.adjustments.map((a) => [a.kind, a.days, a.year]), [['manual', 2.5, 2026]]);
+  // confirmed-only switched off (management option): probation staff carry by grade
+  assert.equal(closeYearFor({ employee_id: 1, confirmed: false, grade: 'S', balance: 5 }, { ...ap, confirmed_only: false }, 2026).carry, 3);
 });
 
 test('OTCF lines -> Employment Act categories', () => {

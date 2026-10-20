@@ -2,7 +2,7 @@
 import { h, clear, pageHead, fmtDate } from '../ui.js';
 import { loadRef, fetchAll } from '../data.js';
 import { employmentStatus, serviceLength, formatService, todayIso, firstOfMonth, lastDayOfMonth } from '../engines/employee.js';
-import { openAddEmployee } from '../employee-forms.js';
+import { openAddEmployee, editLeaving, rehireLabel } from '../employee-forms.js';
 
 const STATUS_TABS = [['current', 'Current staff'], ['notice', 'Serving notice'], ['former', 'Former staff'], ['all', 'Everyone']];
 
@@ -18,7 +18,8 @@ export async function render(el, ctx, params, query) {
     r._search = [r.full_name, r.chinese_name, r.emp_id, r.job_title, r.department_code].filter(Boolean).join(' ').toLowerCase();
   }
 
-  const st = { status: query.status || 'current', company: query.company || '', dept: query.dept || '', q: query.q || '', missing: query.missing === '1' || query.missing === 'true' };
+  const st = { status: query.status || 'current', company: query.company || '', dept: query.dept || '', q: query.q || '', missing: query.missing === '1' || query.missing === 'true', noreason: query.noreason === '1' || query.noreason === 'true' };
+  const noReason = (r) => r._status.key === 'former' && !r.leaving_reason;
   const isMissing = (r) => r._status.key === 'former' && !r.resigned_date;
   const counts = { current: rows.filter((r) => r._status.key !== 'former').length, notice: rows.filter((r) => r._status.key === 'notice').length,
     former: rows.filter((r) => r._status.key === 'former').length, all: rows.length };
@@ -42,6 +43,8 @@ export async function render(el, ctx, params, query) {
     ['Joined this month', rows.filter((r) => r.join_date && r.join_date.slice(0, 7) === ym).length],
     ['Leaving this month', rows.filter((r) => r.resigned_date && r.resigned_date >= firstOfMonth(today) && r.resigned_date <= lastDayOfMonth(today)).length],
   ];
+  const noReasonCount = rows.filter(noReason).length;
+  if (noReasonCount) facts.push(['Former staff with no leaving reason', noReasonCount, () => { st.status = 'former'; st.missing = false; st.noreason = true; sync(); draw(); }, true]);
   if (missingCount) facts.push(['Former staff with no last working day', missingCount, () => { st.status = 'former'; st.missing = true; sync(); draw(); }, true]);
 
   el.append(
@@ -73,20 +76,24 @@ export async function render(el, ctx, params, query) {
       && (!st.company || String(r.company_id) === st.company)
       && (!st.dept || String(r.department_id) === st.dept)
       && (!st.missing || isMissing(r))
+      && (!st.noreason || noReason(r))
       && (!q || r._search.includes(q)));
   }
 
   function draw() {
     clear(tabs).append(...STATUS_TABS.map(([k, l]) => h('button', { type: 'button', role: 'tab', 'aria-selected': String(st.status === k),
-      onclick: () => { st.status = k; st.missing = false; sync(); draw(); } }, `${l} (${counts[k]})`)));
+      onclick: () => { st.status = k; st.missing = false; st.noreason = false; sync(); draw(); } }, `${l} (${counts[k]})`)));
     if (st.missing) tabs.append(h('button', { type: 'button', class: 'tag warn', style: 'margin-left:.5rem', onclick: () => { st.missing = false; sync(); draw(); } }, 'No last working day only ✕'));
+    if (st.noreason) tabs.append(h('button', { type: 'button', class: 'tag warn', style: 'margin-left:.5rem', onclick: () => { st.noreason = false; sync(); draw(); } }, 'No leaving reason only ✕'));
+    const former = st.status === 'former';
     const list = filtered();
     countEl.textContent = `${list.length} of ${rows.length} people`;
     clear(body);
     if (!list.length) { body.append(h('div', { class: 'empty-state' }, 'No one matches these filters.')); return; }
     body.append(h('table', { class: 'data clickable' },
       h('thead', {}, h('tr', {}, h('th', {}, 'Employee'), h('th', {}, 'Company'), h('th', {}, 'Department'),
-        h('th', {}, 'Job title'), h('th', {}, 'Joined'), st.status === 'former' ? h('th', {}, 'Last day') : null, h('th', {}, 'Service'), h('th', {}, 'Status'))),
+        h('th', {}, 'Job title'), h('th', {}, 'Joined'), former ? h('th', {}, 'Last day') : null, h('th', {}, 'Service'), h('th', {}, 'Status'),
+        former ? h('th', {}, 'Leaving reason') : null, former ? h('th', {}, 'Rehire') : null)),
       h('tbody', {}, list.map((r) => {
         const end = r._status.key === 'former' ? r.resigned_date : today;
         return h('tr', { tabindex: '0', onclick: () => open(r), onkeydown: (e) => { if (e.key === 'Enter') open(r); } },
@@ -98,8 +105,18 @@ export async function render(el, ctx, params, query) {
           h('td', { class: 'nowrap' }, fmtDate(r.join_date)),
           st.status === 'former' ? h('td', { class: 'nowrap' }, r.resigned_date ? fmtDate(r.resigned_date) : h('span', { class: 'tag warn' }, 'Missing')) : null,
           h('td', { class: 'nowrap' }, r.join_date && end ? formatService(serviceLength(r.join_date, end)) : ''),
-          h('td', {}, statusTag(r._status, r.confirmation_status)));
+          h('td', {}, statusTag(r._status, r.confirmation_status)),
+          former ? h('td', {}, r.leaving_reason ? h('span', { title: r.leaving_note || '' }, ref.label('leaving_reason', r.leaving_reason))
+            : canEdit ? h('button', { class: 'btn sm', type: 'button', onclick: (e) => { e.stopPropagation(); editLeaving(ctx, ref, r, () => reloadRow(r)); } }, 'Add reason')
+              : h('span', { class: 'tag warn' }, 'Missing')) : null,
+          former ? h('td', { title: r.rehire_note || '' }, rehireTag(r.rehire_eligibility)) : null);
       }))));
+  }
+  const rehireTag = (c) => (c ? h('span', { class: `tag ${c === 'eligible' ? 'ok' : c === 'conditional' ? 'warn' : 'bad'}` }, rehireLabel(c)) : h('span', { class: 'muted small' }, '—'));
+  async function reloadRow(r) {
+    const { data } = await ctx.sb.from('eppd_employee_list').select('*').eq('id', r.id).single();
+    if (data) { const st2 = r._status; const s2 = r._search; Object.assign(r, data, { _status: st2, _search: s2 }); }
+    draw();
   }
   const open = (r) => { location.hash = `#/employees/${r.id}`; };
   function sync() {
@@ -114,7 +131,8 @@ export async function render(el, ctx, params, query) {
   function exportCsv() {
     const list = filtered();
     const cols = [['Employee ID', 'emp_id'], ['Name', 'full_name'], ['Chinese name', 'chinese_name'], ['Company', 'company_name'],
-      ['Department', 'department_code'], ['Job title', 'job_title'], ['Joined', 'join_date'], ['Last day', 'resigned_date'], ['Status', (r) => r._status.label]];
+      ['Department', 'department_code'], ['Job title', 'job_title'], ['Joined', 'join_date'], ['Last day', 'resigned_date'], ['Status', (r) => r._status.label],
+      ['Leaving reason', (r) => (r.leaving_reason ? ref.label('leaving_reason', r.leaving_reason) : '')], ['Leaving details', 'leaving_note'], ['Rehire', (r) => rehireLabel(r.rehire_eligibility) || ''], ['Rehire note', 'rehire_note']];
     const esc = (v) => { const s = v === null || v === undefined ? '' : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
     const csv = [cols.map((c) => c[0]).join(','), ...list.map((r) => cols.map(([, k]) => esc(typeof k === 'function' ? k(r) : r[k])).join(','))].join('\r\n');
     const a = h('a', { href: URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv' })), download: `employees-${today}.csv` });

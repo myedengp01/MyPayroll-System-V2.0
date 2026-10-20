@@ -1,6 +1,6 @@
 // MyPayroll-System-V2.0 · leave-data.js — loaders shared by the Time & leave screens
 import { fetchAll, loadRef } from './data.js';
-import { leaveBalances } from './engines/leave.js';
+import { leaveBalances, closeYearFor } from './engines/leave.js';
 import { employmentStatus, todayIso } from './engines/employee.js';
 
 export const LEAVE_LABELS = { AL: 'Annual', SL: 'Sick', HPL: 'Hospitalisation', MTL: 'Maternity', PTL: 'Paternity', RL: 'Replacement', CPL: 'Compassionate', UPL: 'Unpaid' };
@@ -28,17 +28,48 @@ export async function loadHolidaySet(sb, years) {
   return new Set((data || []).map((h) => h.holiday_date));
 }
 
-/** Everything needed to show balances for one year. */
-export async function loadLeaveYear(sb, year) {
-  const ref = await loadRef(sb);
-  const [people, records, adjustments, kpi, close] = await Promise.all([
-    loadPeople(sb, ref),
+/** Leave records, adjustments, KPI grades and the close of one year. */
+async function loadYearRaw(sb, year) {
+  const [records, adjustments, kpi, close] = await Promise.all([
     fetchAll(() => sb.from('eppd_leave_records').select('*').gte('date_from', `${year}-01-01`).lte('date_from', `${year}-12-31`).order('date_from', { ascending: false })),
     fetchAll(() => sb.from('eppd_leave_adjustments').select('*').eq('year', year)),
     fetchAll(() => sb.from('eppd_kpi_ratings').select('*').eq('year', year)),
     sb.from('eppd_leave_year_closes').select('*').eq('year', year).maybeSingle(),
   ]);
-  return { ref, people, records, adjustments, kpi, closed: close.data || null, year };
+  return { records, adjustments, kpi, closed: close.data || null, year };
+}
+
+/** Everything needed to show balances for one year. */
+export async function loadLeaveYear(sb, year, { provisional = true } = {}) {
+  const ref = await loadRef(sb);
+  const [people, Y] = await Promise.all([loadPeople(sb, ref), loadYearRaw(sb, year)]);
+  const D = { ref, people, ...Y };
+  if (provisional) await addProvisionalCarry(sb, D);
+  return D;
+}
+
+/**
+ * Automatic carry forward (PRI-004): until last year is closed, show what its 31 Dec balance would carry into this year,
+ * by the same rules as the close. Only for people with leave history last year and no carried / opening days posted yet.
+ */
+async function addProvisionalCarry(sb, D) {
+  const prev = D.year - 1;
+  const P = await loadYearRaw(sb, prev);
+  D.prevClosed = P.closed;
+  if (P.closed) return;
+  const cf = D.ref.policies.carry_forward || {};
+  const PD = { ...P, ref: D.ref };
+  const grade = new Map(P.kpi.map((k) => [k.employee_id, k]));
+  const has = (rows, id) => rows.some((r) => r.employee_id === id);
+  for (const p of D.people) {
+    if (!(has(P.records, p.id) || has(P.adjustments, p.id))) continue;
+    if (D.adjustments.some((a) => a.employee_id === p.id && a.leave_type === 'AL' && ['carry_forward', 'opening'].includes(a.kind))) continue;
+    const e = p.employment; if (!e || (e.resigned_date && e.resigned_date < `${prev}-12-31`) || (e.join_date && e.join_date > `${prev}-12-31`)) continue;
+    const b = balancesFor(p, PD, `${prev}-12-31`);
+    const k = grade.get(p.id);
+    const r = closeYearFor({ employee_id: p.id, confirmed: e.confirmation_status === 'C', grade: k?.grade || null, override: k?.cf_override ?? null, balance: b.AL.balance }, cf, prev);
+    for (const a of r.adjustments.filter((x) => x.kind === 'carry_forward')) D.adjustments.push({ ...a, source: 'provisional', provisional: true });
+  }
 }
 
 export function balancesFor(person, D, asOf, cutoff = null) {

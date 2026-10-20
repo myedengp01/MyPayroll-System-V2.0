@@ -18,6 +18,7 @@ const ROUTES = {
   'leave/balances':         { label: 'Leave balances',         load: () => import('./modules/balances.js'), roles: ['admin', 'hr'] },
   'leave/audit':            { label: 'Leave by month (audit)', load: () => import('./modules/leaveaudit.js'), roles: ['admin', 'hr'] },
   'leave/al-calculator':    { label: 'AL calculator',          load: () => import('./modules/alcalc.js'), roles: ['admin', 'hr'] },
+  'leave/kpi':              { label: 'KPI grades & carry forward', load: () => import('./modules/kpi.js'), roles: ['admin', 'hr'] },
   'leave/year-end':         { label: 'Year-end close',         load: () => import('./modules/yearclose.js'), roles: ['admin', 'hr'] },
   'time':                   { label: 'Overtime & hours',       load: () => import('./modules/overtime.js'), roles: ['admin', 'hr'] },
   'time/part-time':         { label: 'Part-time hours',        load: () => import('./modules/parttime.js'), roles: ['admin', 'hr'] },
@@ -43,7 +44,7 @@ const ROUTES = {
 const MENU = [
   { group: null, items: ['dashboard'] },
   { group: 'People', items: ['employees', 'employees/former', 'employees/ids', 'employees/import'] },
-  { group: 'Time & leave', items: ['leave', 'leave/balances', 'leave/audit', 'leave/al-calculator', 'leave/year-end', 'time', 'time/part-time', 'leave/import'] },
+  { group: 'Time & leave', items: ['leave', 'leave/balances', 'leave/audit', 'leave/al-calculator', 'leave/kpi', 'leave/year-end', 'time', 'time/part-time', 'leave/import'] },
   { group: 'Payroll', items: ['payroll', 'reports', 'payroll/companies', 'claims', 'loans', 'settlements', 'payroll/import'] },
   { group: 'Settings', items: ['settings/companies', 'settings/org', 'settings/lists', 'settings/payment-types',
     'settings/statutory', 'settings/holidays', 'settings/policies', 'settings/users', 'settings/audit'] },

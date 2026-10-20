@@ -150,7 +150,12 @@ export async function render(el, ctx) {
   const labels = cf.grade_labels || {};
   const expiryIn = h('input', { type: 'text', placeholder: 'e.g. 06-30', value: cf.expiry || '', disabled: !isAdmin, style: 'width:7rem', 'aria-label': 'Expiry MM-DD' });
   const optsIn = h('input', { type: 'text', value: (cf.buyback_options || []).join(', '), disabled: !isAdmin, style: 'width:12rem', 'aria-label': 'Buy-back options' });
-  el.append(panel('Annual leave carry forward', 'Applied at Year-end close. Only confirmed staff carry leave; unused days above the cap are bought back (if the grade allows and you choose a rate) or forfeited.',
+  const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  const cutSel = h('select', { disabled: !isAdmin, 'aria-label': 'KPI cut-off month', style: 'width:auto' }, MONTHS.map((m, i) => h('option', { value: i + 1, selected: Number(cf.kpi_cutoff_month ?? 10) === i + 1 }, m)));
+  const confSw = field('Only confirmed staff carry leave forward (management option)', { type: 'switch', value: cf.confirmed_only !== false });
+  const apprSw = field('Buy-back needs management approval (approver and date recorded)', { type: 'switch', value: cf.buyback_needs_approval !== false });
+  confSw.input.disabled = !isAdmin; apprSw.input.disabled = !isAdmin;
+  el.append(panel('Annual leave carry forward', 'Applied at Year-end close to the balance at 31 December: nothing if there is none, the whole balance if it is within the cap, otherwise the cap. A negative balance becomes unpaid leave in December’s payroll. Days above the cap are bought back (eligible grades, with management approval) or forfeited.',
     h('table', { class: 'data', style: 'max-width:640px' },
       h('thead', {}, h('tr', {}, h('th', {}, 'KPI grade'), h('th', {}, 'Carry up to'), h('th', {}, 'Buy-back allowed'))),
       h('tbody', {}, gradeOrder(cf.grades).map((g) => {
@@ -160,12 +165,15 @@ export async function render(el, ctx) {
       }))),
     h('div', { class: 'form-grid', style: 'margin-top:1rem;max-width:640px' },
       h('label', { class: 'field' }, 'Buy-back rates offered (% of daily rate)', optsIn, h('span', { class: 'small muted' }, 'Comma separated. A custom rate can also be typed at year end.')),
-      h('label', { class: 'field' }, 'Carried leave expires on (MM-DD of the next year)', expiryIn, h('span', { class: 'small muted' }, 'Leave blank for no expiry.'))),
+      h('label', { class: 'field' }, 'Carried leave expires on (MM-DD of the next year)', expiryIn, h('span', { class: 'small muted' }, 'Leave blank for no expiry.')),
+      h('label', { class: 'field' }, 'KPI cut-off month', cutSel, h('span', { class: 'small muted' }, 'The KPI year runs to the end of this month; grades are given after it. No grade = no carry forward.')),
+      h('div', {}), confSw, apprSw),
     saveBtn('Save carry-forward rules', () => {
       const ex = expiryIn.value.trim();
       if (ex && !/^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(ex)) { toast('Expiry must look like 06-30.', 'error'); return; }
       cf.expiry = ex || null;
       cf.buyback_options = optsIn.value.split(',').map((x) => Number(x.trim())).filter((x) => x > 0 && x <= 100);
+      cf.kpi_cutoff_month = Number(cutSel.value); cf.confirmed_only = confSw.getValue(); cf.buyback_needs_approval = apprSw.getValue();
       save('carry_forward', cf, 'Carry-forward rules');
     })));
 

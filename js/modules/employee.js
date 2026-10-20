@@ -5,7 +5,7 @@ import { employmentStatus, serviceLength, formatService, todayIso, ageOn, socsoF
 import { computeNotice } from '../engines/notice.js';
 import { STAT_COLS_EE, statVal } from '../engines/payroll.js';
 import { statusTag } from './employees.js';
-import { editPerson, editPrivate, editEmployment, recordResignation, editAssignment, editSalary, editAllowance, deleteRow } from '../employee-forms.js';
+import { editPerson, editPrivate, editEmployment, recordResignation, editAssignment, editSalary, editAllowance, deleteRow, rehireLabel } from '../employee-forms.js';
 import { loadLeaveYear, balancesFor, loadHolidaySet, LEAVE_LABELS } from '../leave-data.js';
 import { openLeaveForm } from './leave.js';
 
@@ -124,10 +124,20 @@ export async function render(el, ctx, params, query) {
   }
 
   // ---------------------------------------------------------------- employment
+  /** Earlier periods, newest first, for the rehire reminder (PRI-002). */
+  function previousStints() {
+    return D.empls.map((em) => {
+      const asgs = asgOf(em.id);
+      const sal = D.sal.filter((x) => asgs.some((a) => a.id === x.assignment_id)).sort((a, b) => String(b.effective_from).localeCompare(String(a.effective_from)))[0];
+      return { ...em, centre: em.department_id ? ref.department(em.department_id)?.code : null, position: ref.jobTitle(em.job_title_id)?.name,
+        company: asgs.map((a) => ref.company(a.company_id)?.short_name || ref.company(a.company_id)?.name).filter(Boolean).join(', '),
+        last_salary: sal ? sal.amount : null, short_notice: !!(em.notice_until && em.resigned_date && em.resigned_date < em.notice_until) };
+    });
+  }
   function employmentTab() {
     const wrap = h('div', { class: 'stack' });
     if (canHR) wrap.append(h('div', { class: 'side-actions' },
-      h('button', { class: 'btn sm', type: 'button', onclick: () => editEmployment(ctx, ref, id, null, reload, { companyForNew: asgOf(cur()?.id)[0]?.company_id }) }, 'Add employment period (rehire)')));
+      h('button', { class: 'btn sm', type: 'button', onclick: () => editEmployment(ctx, ref, id, null, reload, { companyForNew: asgOf(cur()?.id)[0]?.company_id, previous: previousStints() }) }, 'Add employment period (rehire)')));
     if (!D.empls.length) wrap.append(h('div', { class: 'empty-state' }, 'No employment record yet.'));
     D.empls.forEach((em, i) => {
       const status = employmentStatus(em, ref.confMeta, today);
@@ -152,6 +162,8 @@ export async function render(el, ctx, params, query) {
           ['Job title', ref.jobTitle(em.job_title_id)?.name], ['Paid by', asgOf(em.id).map((a) => ref.company(a.company_id)?.name).join(', ')],
           ['Working hours', hours], em.job_status === 'PT' ? ['Weekly hours', em.weekly_hours ? `${em.weekly_hours} h (leave pro-rated)` : 'Not recorded: leave shown at full-time rates'] : null, ['OT basis', `÷ ${em.ot_days ?? 26} days · normal-day OT × ${em.ot_multiplier ?? 1.5}`],
           ['Resignation letter', fmtDate(em.resignation_letter_date)], ['Notice period', notice], ['Last working day', fmtDate(em.resigned_date)],
+          em.resigned_date ? ['Reason for leaving', em.leaving_reason ? [ref.label('leaving_reason', em.leaving_reason), em.leaving_note].filter(Boolean).join(' · ') : 'Not recorded'] : null,
+          em.rehire_eligibility ? ['Rehire', [rehireLabel(em.rehire_eligibility), em.rehire_note].filter(Boolean).join(' · ')] : null,
           ['Notes', em.notes]])));
     });
     return wrap;
