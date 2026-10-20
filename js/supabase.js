@@ -3,5 +3,5 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js';
 
 export const isConfigured = !SUPABASE_ANON_KEY.startsWith('PASTE_');
 export const sb = createClient(SUPABASE_URL, isConfigured ? SUPABASE_ANON_KEY : 'missing-key', {
-  auth: { persistSession: true, autoRefreshToken: true, storageKey: 'eppd-auth' },
+  auth: { persistSession: true, autoRefreshToken: true, storageKey: 'eppd-cms-auth' },
 });

@@ -134,7 +134,9 @@ export async function render(el, ctx, params, query) {
       let notice = null;
       if (em.resignation_letter_date && ref.policies.notice_period) {
         const r = computeNotice({ joinDate: em.join_date, letterDate: em.resignation_letter_date, onProbation: em.confirmation_status === 'UP' }, ref.policies.notice_period);
-        if (r) notice = `${r.weeks} weeks (${r.days} days) from ${fmtDate(em.resignation_letter_date)} → ${fmtDate(r.noticeEnd)}`;
+        if (r) notice = em.notice_until && em.notice_until !== r.noticeEnd
+          ? `Until ${fmtDate(em.notice_until)} (agreed; policy: ${r.weeks} weeks → ${fmtDate(r.noticeEnd)})`
+          : `${r.weeks} weeks (${r.days} days) from ${fmtDate(em.resignation_letter_date)} → ${fmtDate(r.noticeEnd)}`;
       }
       const hours = em.work_from && em.work_to ? `${String(em.work_from).slice(0, 5)} – ${String(em.work_to).slice(0, 5)}, ${em.meal_hours ?? 1} h meal` : null;
       wrap.append(h('div', { class: 'block' },

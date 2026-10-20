@@ -1,0 +1,8 @@
+# test dependencies (run npm install locally)
+node_modules/
+# real salary / personal data used by local tests — NEVER commit (this repo is public)
+tests/fixtures/golden_payroll_rows.json
+*.xlsm
+*.xlsx
+.DS_Store
+package-lock.json

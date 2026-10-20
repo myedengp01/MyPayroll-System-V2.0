@@ -84,3 +84,10 @@ export function otcfToEntries(subs, resolve, normalFor) {
   }
   return { entries, unmatched: [...unmatched.values()], skipped };
 }
+
+/** Hours between two times (overnight allowed), minus a break, to the quarter hour. null when a time is missing. */
+export function hoursBetween(from, to, breakHours = 0) {
+  const a = toMin(from), b = toMin(to); if (a === null || b === null) return null;
+  const mins = b > a ? b - a : b + 1440 - a;
+  return Math.max(0, Math.round((mins / 60 - (Number(breakHours) || 0)) * 4) / 4);
+}

@@ -2,11 +2,13 @@
 // Separate sign-in and storage key, so it never affects your payroll session.
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
 import * as cfg from './config.js';
+import { sb } from './supabase.js';
 
 export const megformsConfigured = !!(cfg.MEGFORMS_URL && cfg.MEGFORMS_ANON_KEY);
-export const mf = megformsConfigured ? createClient(cfg.MEGFORMS_URL, cfg.MEGFORMS_ANON_KEY, {
+// Since v2026.10.19 payroll and MEG-FORMS share one database: reuse the payroll sign-in instead of a second one.
+export const mf = !megformsConfigured ? null : cfg.MEGFORMS_URL === cfg.SUPABASE_URL ? sb : createClient(cfg.MEGFORMS_URL, cfg.MEGFORMS_ANON_KEY, {
   auth: { persistSession: true, autoRefreshToken: true, storageKey: 'eppd-megforms-auth' },
-}) : null;
+});
 
 /** Approved OTCF claims for a month (soft-deleted ones excluded when the column exists). */
 export async function fetchApprovedOtcf(year, month) {

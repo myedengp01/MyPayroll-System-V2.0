@@ -4,7 +4,7 @@ import { h, clear, pageHead, toast, failed, money, fmtDate, field } from '../ui.
 import { loadRef } from '../data.js';
 import { loadFinalisedRuns, loadLines, loadPeopleDetails } from '../report-data.js';
 import { downloadXlsx } from '../xlsx-export.js';
-import { loadLeaveYear, balancesFor, loadPeople } from '../leave-data.js';
+import { loadLeaveYear, leaveForMonth, loadPeople, MONTH_TYPES } from '../leave-data.js';
 import { payslipModel, sumLines, paidLines, summaryColumns, itemsByCode, ytdRows, eaFigures, socsoNo } from '../engines/reports.js';
 import { monthLabel, periodOf, STAT_COLS, STAT_LEGEND, statVal } from '../engines/payroll.js';
 import { lastDayOfMonth, todayIso } from '../engines/employee.js';
@@ -85,11 +85,10 @@ export async function render(el, ctx, params, query) {
       const pick = query.print === 'all' ? lines : lines.filter((l) => String(l.id) === query.print);
       const L = await loadLeaveYear(ctx.sb, Number(month.slice(0, 4)));
       const leavePeople = new Map((await loadPeople(ctx.sb, L.ref)).map((p) => [p.id, p]));
-      const asOf = lastDayOfMonth(month);
       const sheets = pick.map((l) => {
         const ytd = allLines.filter((x) => x.employee_id === l.employee_id && (x.company_id || 0) === (l.company_id || 0) && x.period <= month);
         let leave = null;
-        try { const lp = leavePeople.get(l.employee_id); if (lp) leave = balancesFor(lp, L, asOf); } catch { leave = null; }
+        try { const lp = leavePeople.get(l.employee_id); if (lp) leave = leaveForMonth(lp, L, month); } catch { leave = null; }
         return payslipSheet(l, payslipModel(l, ytd), leave);
       });
       printDoc(sheets, `Payslips ${shortMonth(month)}`);
@@ -107,6 +106,19 @@ export async function render(el, ctx, params, query) {
           h('td', { class: 'num strong' }, money(l.net_paid)),
           h('td', {}, h('button', { class: 'btn sm', type: 'button', onclick: () => go({ print: String(l.id) }) }, 'Payslip')))))))));
     return;
+  }
+
+  // leave on the payslip: entitled this year, taken this month, taken to date and the balance at the month end
+  function leaveTable(leave) {
+    const head = h('thead', {}, h('tr', {}, h('th', {}, `Leave ${month.slice(0, 4)} (days)`), ...['Entitled', `Taken in ${shortMonth(month)}`, 'Taken to date', `Balance at ${fmtDate(lastDayOfMonth(month))}`].map((t) => h('th', { class: 'num wrap' }, t))));
+    if (!leave) return h('table', { class: 'doc-table small leave-slip' }, head, h('tbody', {}, h('tr', {}, h('td', { colspan: 5, class: 'muted' }, 'Leave not available'))));
+    const show = MONTH_TYPES.filter(([t]) => t === 'AL' || t === 'SL' || (leave[t] && (leave[t].toDate || leave[t].month || (t === 'RL' && leave[t].entitled))));
+    const f = (v) => (v === null || v === undefined ? '—' : String(v));
+    return h('table', { class: 'doc-table small leave-slip' }, head, h('tbody', {}, show.map(([t, label]) => {
+      const x = leave[t];
+      return h('tr', {}, h('td', {}, label, t === 'AL' && x.carried ? h('span', { class: 'muted' }, ` (incl. ${x.carried} brought forward)`) : null),
+        h('td', { class: 'num' }, f(x.entitled)), h('td', { class: 'num' }, x.month ? String(x.month) : '0'), h('td', { class: 'num' }, f(x.toDate)), h('td', { class: 'num strong' }, f(x.balance)));
+    })));
   }
 
   function payslipSheet(l, m, leave) {
@@ -130,15 +142,13 @@ export async function render(el, ctx, params, query) {
       m.claims.length ? h('table', { class: 'doc-table' }, h('thead', {}, h('tr', {}, h('th', {}, 'Claims reimbursed (not taxed)'), h('th', { class: 'num' }, 'RM'))),
         h('tbody', {}, ...amtRows(m.claims)), h('tfoot', {}, h('tr', {}, h('th', {}, 'Total claims'), h('th', { class: 'num' }, money(m.claimsTotal))))) : null,
       h('div', { class: 'doc-net' }, h('span', {}, m.claims.length ? 'NET PAY (incl. claims)' : 'NET PAY'), h('b', {}, `RM ${money(m.netPaid)}`)),
-      h('div', { class: 'doc-three' },
+      h('div', { class: 'doc-two' },
         h('table', { class: 'doc-table small' }, h('thead', {}, h('tr', {}, h('th', {}, 'Employer contributions'), h('th', { class: 'num' }, 'RM'))),
           h('tbody', {}, m.statutory.filter((s) => s.er !== null).map((s) => h('tr', {}, h('td', {}, s.label.replace(' – Invalidity', '')), h('td', { class: 'num' }, money(s.er)))))),
         h('table', { class: 'doc-table small' }, h('thead', {}, h('tr', {}, h('th', {}, `Year to date ${month.slice(0, 4)}`), h('th', { class: 'num' }, 'RM'))),
           h('tbody', {}, [['Gross pay', m.ytd.gross], ['EPF', m.ytd.epf_ee], ['SOCSO – Invalidity', statVal(m.ytd, 'socso_ee_inv')], ['SOCSO – NEI', m.ytd.socso_ee_nei], ['EIS', m.ytd.eis_ee], ['PCB', m.ytd.pcb], ['Net paid', m.ytd.net_paid]]
-            .map(([k, v]) => h('tr', {}, h('td', {}, k), h('td', { class: 'num' }, money(v)))))),
-        h('table', { class: 'doc-table small' }, h('thead', {}, h('tr', {}, h('th', {}, `Leave at ${fmtDate(lastDayOfMonth(month))}`), h('th', { class: 'num' }, 'Days left'))),
-          h('tbody', {}, leave ? [['Annual leave', leave.AL.balance], ['Sick leave', leave.SL.balance], ['Replacement leave', leave.RL.balance]].map(([k, v]) => h('tr', {}, h('td', {}, k), h('td', { class: 'num' }, String(v ?? '—'))))
-            : h('tr', {}, h('td', { colspan: 2, class: 'muted' }, 'Not available'))))),
+            .map(([k, v]) => h('tr', {}, h('td', {}, k), h('td', { class: 'num' }, money(v))))))),
+      leaveTable(leave),
       h('div', { class: 'doc-foot' }, h('span', {}, `Paid to: ${[P.bank(p.priv.bank_code), p.priv.bank_account_no].filter(Boolean).join(' ') || 'bank details not recorded'}`),
         h('span', {}, 'This is a computer-generated payslip; no signature is required.')));
   }

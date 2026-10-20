@@ -127,8 +127,10 @@ export function leaveBalances(input) {
   const asOf = input.asOf || todayIso();
   const rules = policies.leave_rules || {};
   const partTime = em.job_status === 'PT';
-  const recs = (input.records || []).filter((r) => r.status !== 'cancelled' && String(r.date_from).slice(0, 4) === String(year));
-  const adjs = (input.adjustments || []).filter((a) => Number(a.year) === Number(year));
+  // cutoff (optional): only leave taken / adjustments dated on or before it count (payslips and the monthly audit)
+  const cut = input.cutoff || null;
+  const recs = (input.records || []).filter((r) => r.status !== 'cancelled' && String(r.date_from).slice(0, 4) === String(year) && (!cut || String(r.date_from) <= cut));
+  const adjs = (input.adjustments || []).filter((a) => Number(a.year) === Number(year) && (!cut || !a.effective_date || String(a.effective_date) <= cut));
   const taken = (t) => r2(recs.filter((r) => r.leave_type === t).reduce((s, r) => s + Number(r.days), 0));
   const adj = (t, kinds) => r2(adjs.filter((a) => a.leave_type === t && kinds.includes(a.kind)).reduce((s, a) => s + Number(a.days), 0));
   const out = {};

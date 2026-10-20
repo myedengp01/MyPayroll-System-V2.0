@@ -33,11 +33,16 @@ export async function render(el, ctx) {
   for (const p of people) for (const em of p.employments || []) {
     const inWindow = em.resigned_date && em.resigned_date >= from && em.resigned_date <= to;
     if (!inWindow && !stBy.has(em.id)) continue;
-    const asg = (em.assignments || []).find((a) => a.is_primary) || em.assignments?.[0];
+    // the main company on the last working day (an earlier company may also be marked main for its own months)
+    const onDay = em.resigned_date || today;
+    const covers = (a) => (!a.start_date || a.start_date <= onDay) && (!a.end_date || a.end_date >= onDay);
+    const asg = (em.assignments || []).find((a) => a.is_primary && covers(a)) || (em.assignments || []).find(covers)
+      || (em.assignments || []).find((a) => a.is_primary) || em.assignments?.[0];
     const sal = asg ? salaryAsOf(asg.salary_history || [], em.resigned_date || today) : null;
     const R = ratesOfPay(sal, em);
     const n = em.resignation_letter_date && notice ? computeNotice({ joinDate: em.join_date, letterDate: em.resignation_letter_date, onProbation: em.confirmation_status === 'UP' }, notice) : null;
-    const shortCal = n && em.resigned_date && em.resigned_date < n.noticeEnd ? daysBetween(em.resigned_date, n.noticeEnd) : 0;
+    const noticeEnd = em.notice_until || n?.noticeEnd;   // an agreed notice date on record wins over the policy
+    const shortCal = noticeEnd && em.resigned_date && em.resigned_date < noticeEnd ? daysBetween(em.resigned_date, noticeEnd) : 0;
     const shortDays = Math.round(shortCal * 6 / 7 * 2) / 2;   // calendar days short → working days (6-day week), to the half day
     const myLoans = loans.filter((ln) => ln.employee_id === p.id).map((ln) => ({ ...ln, balance: Math.max(0, r2(Number(ln.principal) - (repaid.get(ln.id) || 0))) }));
     rows.push({ p, em, R, n, shortCal, shortDays, st: stBy.get(em.id) || null, loanBal: r2(myLoans.reduce((s, ln) => s + ln.balance, 0)), period: em.resigned_date ? periodOf(em.resigned_date) : null });

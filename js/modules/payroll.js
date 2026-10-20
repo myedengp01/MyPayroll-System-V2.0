@@ -1,7 +1,13 @@
 // Monthly payroll: list of months, and the pay run for one month (prepare → finalise)
 import { h, clear, pageHead, toast, failed, confirmDialog, openModal, field, money, fmtDateTime, switchToggle } from '../ui.js';
 import { fetchAll } from '../data.js';
-import { loadPayMonth } from '../pay-data.js';
+import { loadPayMonth, loadPayInputs } from '../pay-data.js';
+import { loadPeople, loadLeaveYear, loadHolidaySet, LEAVE_LABELS } from '../leave-data.js';
+import { editTimeEntry, pullOtcf } from '../time-forms.js';
+import { savePtTotal } from '../pt-hours.js';
+import { openLeaveForm } from './leave.js';
+import { OT_CATEGORIES } from '../engines/ot.js';
+import { lastDayOfMonth } from '../engines/employee.js';
 import { buildRun, recomputeLine, runTotals, lineSummary, groupItems, itemFromType, itemAmount, monthLabel, periodOf, STAT_KEYS, STAT_LABELS, STAT_COLS, STAT_COLS_EE, STAT_LEGEND, statVal, r2 } from '../engines/payroll.js';
 import { todayIso, addDays } from '../engines/employee.js';
 
@@ -199,6 +205,59 @@ async function renderRun(el, ctx, param) {
   }
 
   // ---------------------------------------------------------- one line
+  // ---------------------------------------------------------- inputs of one line (overtime, hours, leave) — edited from the line window
+  let peopleCache = null;
+  const ymOf = () => ym(D.period);
+  async function inputsPanel(L, onChanged) {
+    const box = h('div', { class: 'inputs-panel' }, h('div', { class: 'loading' }, 'Loading this month’s overtime, hours and leave…'));
+    const month = ymOf(); const start = D.period, end = lastDayOfMonth(D.period);
+    const load = async () => {
+      const [time, leave, monthOtcf] = await Promise.all([
+        fetchAll(() => ctx.sb.from('eppd_time_entries').select('*').eq('employee_id', L.employee_id).gte('work_date', start).lte('work_date', end).order('work_date')),
+        fetchAll(() => ctx.sb.from('eppd_leave_records').select('*').eq('employee_id', L.employee_id).gte('date_from', start).lte('date_from', end).order('date_from')),
+        fetchAll(() => ctx.sb.from('eppd_time_entries').select('employee_id,otcf_submission_id').gte('work_date', start).lte('work_date', end).not('otcf_submission_id', 'is', null)),
+      ]);
+      if (!peopleCache) peopleCache = await loadPeople(ctx.sb, D.ref);
+      const hourly = L.inputs?.basis === 'hourly';
+      const pt = time.filter((e) => e.category === 'PT_HOURS'); const ot = time.filter((e) => e.category !== 'PT_HOURS');
+      const ptTotal = Math.round(pt.reduce((s, e) => s + Number(e.hours), 0) * 100) / 100;
+      const done = async () => { await onChanged(); };
+      const ptIn = h('input', { type: 'number', step: '0.25', min: 0, value: ptTotal || '', placeholder: '0', 'aria-label': 'Total part-time hours', style: 'width:7rem;text-align:right' });
+      const ptSave = h('button', { class: 'btn sm primary', type: 'button', onclick: async () => {
+        const { error } = await savePtTotal(ctx.sb, { employeeId: L.employee_id, month, total: Number(ptIn.value) || 0, entries: pt });
+        if (!failed(error, 'Save hours')) { toast('Hours saved.'); done(); }
+      } }, 'Save total');
+      const timeRow = (e) => h('li', {}, `${e.work_date.slice(8, 10)}/${e.work_date.slice(5, 7)} · ${OT_CATEGORIES[e.category]?.label || e.category} · ${Number(e.hours)} h`,
+        e.source === 'otcf' ? h('span', { class: 'tag info', style: 'margin-left:.3rem' }, 'OTCF') : null,
+        e.source === 'manual' ? h('button', { class: 'linkish small', type: 'button', style: 'margin-left:.4rem', onclick: () => editTimeEntry(ctx, { people: peopleCache, month, entry: e, employeeId: L.employee_id, onSaved: done }) }, 'edit') : null);
+      clear(box).append(h('h3', {}, `Inputs for ${monthLabel(D.period)}`),
+        h('div', { class: 'inputs-grid' },
+          h('div', { class: 'block' }, h('h4', {}, 'Overtime'),
+            ot.length ? h('ul', {}, ot.map(timeRow)) : h('p', { class: 'small muted' }, 'No overtime recorded.'),
+            h('div', { class: 'btn-row' },
+              h('button', { class: 'btn sm', type: 'button', onclick: () => pullOtcf(ctx, { month, people: peopleCache, entries: monthOtcf, onlyEmployeeId: L.employee_id, onSaved: done }) }, 'Pull approved OTCF'),
+              h('button', { class: 'btn sm ghost', type: 'button', onclick: () => editTimeEntry(ctx, { people: peopleCache, month, employeeId: L.employee_id, onSaved: done }) }, 'Add overtime'))),
+          hourly || pt.length ? h('div', { class: 'block' }, h('h4', {}, 'Part-time hours'),
+            h('p', { class: 'small muted', style: 'margin:0 0 .4rem' }, pt.length ? `${ptTotal} h recorded (${pt.length} entr${pt.length === 1 ? 'y' : 'ies'})` : 'No hours recorded yet.'),
+            h('div', { class: 'btn-row', style: 'align-items:center' }, h('span', { class: 'small' }, 'Total this month'), ptIn, ptSave)) : null,
+          h('div', { class: 'block' }, h('h4', {}, 'Leave this month'),
+            leave.length ? h('ul', {}, leave.map((r) => h('li', {}, `${LEAVE_LABELS[r.leave_type] || r.leave_type} · ${Number(r.days)} day${Number(r.days) === 1 ? '' : 's'} · ${r.date_from === r.date_to ? r.date_from : `${r.date_from} – ${r.date_to}`}${r.status === 'cancelled' ? ' (cancelled)' : ''}`))) : h('p', { class: 'small muted' }, 'No leave recorded.'),
+            h('div', { class: 'btn-row' }, h('button', { class: 'btn sm', type: 'button', onclick: async () => {
+              const year = Number(D.period.slice(0, 4));
+              const [LY, holidays] = await Promise.all([loadLeaveYear(ctx.sb, year), loadHolidaySet(ctx.sb, [year - 1, year, year + 1])]);
+              openLeaveForm(ctx, LY, holidays, LY.ref.policies.working_week || { rest_days: [0], off_days: [6] }, null, { employeeId: L.employee_id, onSaved: done });
+            } }, 'Record leave (unpaid, annual, sick…)'),
+            h('a', { class: 'btn sm ghost', href: `#/leave/audit?month=${month}`, target: '_blank', rel: 'noopener' }, 'Leave by month'))),
+          h('div', { class: 'block' }, h('h4', {}, 'Salary & allowances'),
+            h('p', { class: 'small muted', style: 'margin:0 0 .4rem' }, 'Changes to salary, allowances or statutory switches are made on the employee page.'),
+            h('div', { class: 'btn-row' }, h('a', { class: 'btn sm', href: `#/employees/${L.employee_id}?tab=pay`, target: '_blank', rel: 'noopener' }, 'Open employee (new tab)')))),
+        h('p', { class: 'small muted', style: 'margin:.5rem 0 0' }, 'Saving any of these recalculates this line straight away. Then click Apply, and Save draft when you are done.'));
+    };
+    try { await load(); } catch (e) { clear(box).append(h('p', { class: 'setup-warning' }, `Could not load this month’s inputs: ${e.message || e}`)); }
+    box.reload = load;
+    return box;
+  }
+
   function openLine(orig) {
     let L = JSON.parse(JSON.stringify(orig));
     const ro = locked;
@@ -317,10 +376,27 @@ async function renderRun(el, ctx, param) {
         h('p', { class: 'small', style: 'margin-top:.6rem' }, h('a', { href: `#/employees/${L.employee_id}?tab=pay` }, 'Open employee profile ›')));
     };
     draw();
-    openModal({ title: `${L.emp_name} · ${monthLabel(D.period)}`, body: box, wide: true,
+    // inputs: change overtime, part-time hours or leave without leaving the payroll page; the line recalculates on save
+    const holder = h('div', {});
+    if (!ro && L.mode !== 'fixed') {
+      const key = (x) => `${x.employee_id}|${x.company_id || 0}`;
+      const k0 = key(L);
+      inputsPanel(L, async () => {
+        const i = lines.findIndex((x) => key(x) === k0);
+        if (i >= 0) lines[i] = recomputeLine(L, D);
+        Object.assign(D, await loadPayInputs(ctx.sb, D.period, D.period));
+        const res = buildRun({ ...D, existing: lines });
+        lines = res.lines; notices = res.notices || []; dirty = true;
+        const fresh = lines.find((x) => key(x) === k0);
+        if (fresh) { orig = fresh; L = JSON.parse(JSON.stringify(fresh)); }
+        draw(); drawAll(); holder.firstChild?.reload?.();
+        toast(`${L.emp_name}: line recalculated.`);
+      }).then((panel) => holder.append(panel));
+    }
+    openModal({ title: `${L.emp_name} · ${monthLabel(D.period)}`, body: h('div', {}, holder, box), wide: true,
       actions: ro ? [] : [{ label: 'Apply', primary: true, onClick: async (close) => {
         await new Promise((r) => setTimeout(r, 0));
-        const i = lines.indexOf(orig); lines[i] = recomputeLine(L, D); dirty = true; close(); drawTotals(); drawLines(); drawBar(); return true;
+        const i = lines.findIndex((x) => x === orig || (x.employee_id === L.employee_id && (x.company_id || 0) === (L.company_id || 0))); lines[i] = recomputeLine(L, D); dirty = true; close(); drawTotals(); drawLines(); drawBar(); return true;
       } }] });
   }
 

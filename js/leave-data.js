@@ -41,14 +41,38 @@ export async function loadLeaveYear(sb, year) {
   return { ref, people, records, adjustments, kpi, closed: close.data || null, year };
 }
 
-export function balancesFor(person, D, asOf) {
+export function balancesFor(person, D, asOf, cutoff = null) {
   return leaveBalances({
-    employment: person.employment || {}, gender: person.gender, year: D.year, asOf,
+    employment: person.employment || {}, gender: person.gender, year: D.year, asOf, cutoff,
     records: D.records.filter((r) => r.employee_id === person.id),
     adjustments: D.adjustments.filter((a) => a.employee_id === person.id),
     policies: D.ref.policies,
   });
 }
+
+/** Leave types shown month by month (payslip, leave audit). */
+export const MONTH_TYPES = [['AL', 'Annual leave'], ['SL', 'Sick leave'], ['HPL', 'Hospitalisation'], ['RL', 'Replacement leave'], ['CPL', 'Compassionate'], ['UPL', 'Unpaid leave']];
+
+/**
+ * One person's leave for one month: entitled, taken this month, taken to date and the balance at the month end.
+ * month = 'YYYY-MM-01'. Returns { [type]: { entitled, month, toDate, balance } } (balance null for unpaid leave).
+ */
+export function leaveForMonth(person, D, month) {
+  const end = lastDay(month);
+  const b = balancesFor(person, D, end, end);
+  const recs = D.records.filter((r) => r.employee_id === person.id && r.status !== 'cancelled');
+  const inMonth = (t) => r2(recs.filter((r) => r.leave_type === t && String(r.date_from) >= month && String(r.date_from) <= end).reduce((s, r) => s + Number(r.days), 0));
+  return {
+    AL: { entitled: r2(b.AL.entitled + b.AL.carried), month: inMonth('AL'), toDate: b.AL.taken, balance: b.AL.balance, carried: b.AL.carried, needsHours: b.AL.needsHours },
+    SL: { entitled: b.SL.entitled, month: inMonth('SL'), toDate: b.SL.taken, balance: b.SL.balance },
+    HPL: { entitled: b.HPL.entitled, month: inMonth('HPL'), toDate: b.HPL.taken, balance: b.HPL.balance },
+    RL: { entitled: b.RL.earned, month: inMonth('RL'), toDate: b.RL.taken, balance: b.RL.balance },
+    CPL: { entitled: b.CPL.entitled, month: inMonth('CPL'), toDate: b.CPL.taken, balance: b.CPL.balance },
+    UPL: { entitled: null, month: inMonth('UPL'), toDate: b.UPL.taken, balance: null },
+  };
+}
+const r2 = (x) => Math.round((Number(x) + Number.EPSILON) * 100) / 100;
+const lastDay = (iso) => { const d = new Date(`${String(iso).slice(0, 7)}-01T00:00:00Z`); d.setUTCMonth(d.getUTCMonth() + 1); d.setUTCDate(0); return d.toISOString().slice(0, 10); };
 
 /** People to show for a year: everyone employed at any point in that year. */
 export function peopleInYear(people, year) {

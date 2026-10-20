@@ -467,3 +467,23 @@ dl.kv-grid dt { font-size: .78rem; color: var(--muted); }
 dl.kv-grid dd { margin: 0; font-weight: 600; }
 .pcb-calc { background: var(--surface-2); border-radius: var(--radius); padding: .6rem .8rem; font-size: .85rem; margin-top: .5rem; }
 .pcb-calc li { margin: .15rem 0; }
+
+/* v2026.10.19 · payslip leave table, leave audit, part-time hours, payroll line inputs */
+.leave-slip { margin-top: 5mm; width: 100%; }
+.leave-slip td:first-child { white-space: nowrap; }
+.audit-cell { cursor: pointer; }
+.audit-cell:hover { text-decoration: underline; }
+.corr-tag { font-size: .7rem; margin-left: .3rem; }
+.pt-table input[type=number] { width: 7rem; text-align: right; }
+.pt-table td.changed input { border-color: var(--accent, #1a7f6e); box-shadow: 0 0 0 2px rgba(26,127,110,.15); }
+.inputs-panel { border: 1px solid var(--line, #dfe5ec); border-radius: 12px; padding: .8rem 1rem; margin-bottom: 1rem; background: var(--soft, #f7f9fb); }
+.inputs-panel h3 { margin: 0 0 .5rem; font-size: 1rem; }
+.inputs-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap: .8rem; }
+.inputs-grid .block { background: var(--card, #fff); border: 1px solid var(--line, #dfe5ec); border-radius: 10px; padding: .6rem .8rem; }
+.inputs-grid .block h4 { margin: 0 0 .35rem; font-size: .9rem; }
+.inputs-grid ul { margin: 0 0 .5rem; padding-left: 1.1rem; font-size: .85rem; }
+.inputs-grid .btn-row { display: flex; flex-wrap: wrap; gap: .4rem; }
+.seg-tabs { display: flex; flex-wrap: wrap; gap: .35rem; }
+.leave-slip th.num.wrap { white-space: normal; }
+.leave-slip { table-layout: fixed; }
+.leave-slip th:first-child, .leave-slip td:first-child { width: 40%; white-space: normal; }

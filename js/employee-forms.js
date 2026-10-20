@@ -214,6 +214,7 @@ export function recordResignation(ctx, ref, em, onDone) {
   const policy = ref.policies.notice_period;
   const F = {
     letter: field('Resignation letter date', { type: 'date', value: em.resignation_letter_date || todayIso(), required: true }),
+    notice: field('Notice period until', { type: 'date', value: em.notice_until, hint: 'Worked out from the policy. Change it only for an agreed shorter or longer notice.' }),
     last: field('Last working day', { type: 'date', value: em.resigned_date, hint: 'Defaults to the end of the notice period.' }),
     status: field('Set status to', { type: 'select', options: lookupOpts(ref, 'confirmation_status', em.confirmation_status), value: em.confirmation_status,
       hint: 'Keep the current status while serving notice; change to Resigned after the last day if you prefer.' }),
@@ -223,15 +224,19 @@ export function recordResignation(ctx, ref, em, onDone) {
     const r = policy ? computeNotice({ joinDate: em.join_date, letterDate: F.letter.getValue(), onProbation: em.confirmation_status === 'UP' }, policy) : null;
     if (!r) { out.textContent = em.join_date ? 'Enter the letter date.' : 'Add a join date to work out the notice period.'; return null; }
     out.textContent = `${r.years} completed year(s) of service${r.basis === 'probation' ? ', on probation' : ''} → ${r.weeks} weeks' notice (${r.days} days). Notice ends ${r.noticeEnd}.`;
-    if (!F.last.input.dataset.touched) F.last.input.value = r.noticeEnd;
+    if (!F.notice.input.dataset.touched) F.notice.input.value = r.noticeEnd;
+    if (!F.last.input.dataset.touched) F.last.input.value = F.notice.input.value || r.noticeEnd;
     return r;
   };
+  if (em.notice_until) F.notice.input.dataset.touched = '1';
+  F.notice.input.addEventListener('input', () => { F.notice.input.dataset.touched = '1'; if (!F.last.input.dataset.touched) F.last.input.value = F.notice.input.value; });
   F.last.input.addEventListener('input', () => { F.last.input.dataset.touched = '1'; });
   F.letter.input.addEventListener('change', calc);
-  openModal({ title: 'Record resignation', body: h('div', { style: 'display:grid;gap:.9rem' }, F.letter, out, F.last, F.status),
+  openModal({ title: 'Record resignation', body: h('div', { style: 'display:grid;gap:.9rem' }, F.letter, out, F.notice, F.last, F.status),
     actions: [{ label: 'Save resignation', primary: true, onClick: async (close) => {
       const r = calc();
-      const patch = { resignation_letter_date: F.letter.getValue(), resigned_date: F.last.getValue() || r?.noticeEnd || null, confirmation_status: F.status.getValue() || em.confirmation_status };
+      const notice = F.notice.getValue() || r?.noticeEnd || null;
+      const patch = { resignation_letter_date: F.letter.getValue(), notice_until: notice, resigned_date: F.last.getValue() || notice, confirmation_status: F.status.getValue() || em.confirmation_status };
       if (!patch.resignation_letter_date) { toast('Letter date is required.', 'error'); return false; }
       const { error } = await ctx.sb.from('eppd_employments').update(patch).eq('id', em.id);
       if (failed(error)) return false;
