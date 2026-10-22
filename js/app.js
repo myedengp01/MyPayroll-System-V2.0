@@ -2,6 +2,7 @@
 import { sb, isConfigured } from './supabase.js';
 import { VERSION, APP_NAME } from './version.js';
 import { h, clear, toast, logoTile } from './ui.js';
+import { cmsUrlFor } from './cms-link.js';
 
 const root = document.getElementById('app');
 const state = { session: null, me: null, brand: [], recovery: false, modules: {} };
@@ -304,6 +305,15 @@ function renderShell() {
 }
 
 let renderToken = 0;
+/** Phase 6: payroll now runs in the MyEden Group CMS; this app stays open as a fallback until it is made read-only. */
+function cmsBanner(key, params) {
+  try {
+    return h('div', { class: 'cms-move', role: 'note' },
+      h('span', {}, h('b', {}, 'Payroll now runs in the MyEden Group CMS. '), 'Please use the CMS; this app stays open only as a fallback while the CMS is checked, and will become read-only.'),
+      h('a', { class: 'btn sm primary', href: cmsUrlFor(key, params) }, 'Open this page in the CMS ›'));
+  } catch (e) { return ''; }
+}
+
 async function renderPage() {
   const m = matchRoute(location.hash);
   const allowed = ROUTES[m.key] && (!ROUTES[m.key].roles || can(ROUTES[m.key].roles)) && moduleOn(ROUTES[m.key].module);
@@ -320,7 +330,7 @@ async function renderPage() {
     const container = h('div', {});
     await mod.render(container, ctx, allowed ? m.params : {}, allowed ? m.query : {});
     if (token !== renderToken) return;
-    clear(mainEl).append(container, h('p', { class: 'footer-uvn' }, `${APP_NAME} · ${VERSION}`));
+    clear(mainEl).append(cmsBanner(allowed ? m.key : key, allowed ? m.params : {}), container, h('p', { class: 'footer-uvn' }, `${APP_NAME} · ${VERSION}`));
     if (!m.query.keepScroll) window.scrollTo(0, 0);
   } catch (err) {
     console.error(err);

@@ -176,6 +176,9 @@ Its fixture contains real salaries, so it is **git-ignored** and skipped automat
 2. Note the change below.
 
 ## Change log
+- **v2026.10.22-14:55** — Payroll now runs in the **MyEden Group CMS** (CMS Phase 6): every page shows a banner with a link to the
+  same page in the CMS (`js/cms-link.js`, tested in `tests/cmslink.test.js`). This app keeps working unchanged as a fallback while
+  the CMS is checked; it becomes read-only only after the CMS owner confirms.
 - **v2026.10.20-10:50** — Leaving reasons and rehire (PRI-002): a reason is required whenever a last working day is set
   ("Other" needs details); rehire eligibility with a note; Former staff shows reason and rehire with an "Add reason" action
   and a "no leaving reason" count; "Add employment period (rehire)" shows every earlier period (dates, position, centre,

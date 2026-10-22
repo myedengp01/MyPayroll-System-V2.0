@@ -505,3 +505,9 @@ dl.kv-grid dd { margin: 0; font-weight: 600; }
 .add-item input[type=text] { flex: 1 1 10rem; min-width: 8rem; }
 .rehire-box td { vertical-align: top; }
 .rehire-box th { white-space: nowrap; }
+
+/* Phase 6 (CMS): payroll now runs in the MyEden Group CMS */
+.cms-move { display: flex; align-items: center; justify-content: space-between; gap: .8rem 1rem; flex-wrap: wrap; margin-bottom: 1rem;
+  background: var(--marigold-soft); border-left: 4px solid var(--marigold); padding: .7rem 1rem; border-radius: var(--radius-sm); font-size: .92rem; }
+.cms-move a.btn { white-space: nowrap; }
+@media print { .cms-move { display: none !important; } }
